@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NMS PoC — Universo Procedural</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <canvas id="viewport"></canvas>
+
+    <!-- Marcadores projetados no espaço da tela (planetas, nave estacionada) -->
+    <div id="markers"></div>
+
+    <!-- ================= HUD ================= -->
+    <div id="hud" class="hidden">
+      <!-- Telemetria -->
+      <section class="panel panel--tl">
+        <header>TELEMETRIA</header>
+        <div class="row"><span>VEL</span><b id="hud-speed">0</b><i>u/s</i></div>
+        <div class="row"><span>ALT</span><b id="hud-altitude">0</b><i>u</i></div>
+        <div class="row"><span>MODO</span><b id="hud-state">ESPAÇO</b></div>
+
+        <div class="meter" id="meter-throttle">
+          <label>POTÊNCIA</label>
+          <div class="bar"><div id="hud-throttle" class="fill fill--throttle"></div></div>
+        </div>
+        <div class="meter" id="meter-jetpack">
+          <label>JETPACK</label>
+          <div class="bar"><div id="hud-jetpack" class="fill fill--jetpack"></div></div>
+        </div>
+        <div class="meter">
+          <label>ESCUDO</label>
+          <div class="bar"><div id="hud-shield" class="fill fill--shield"></div></div>
+        </div>
+        <div class="meter">
+          <label>ATMOSFERA</label>
+          <div class="bar"><div id="hud-atmo" class="fill fill--atmo"></div></div>
+        </div>
+      </section>
+
+      <!-- Navegação -->
+      <section class="panel panel--tr">
+        <header>NAVEGAÇÃO</header>
+        <div class="row"><span>PLANETA</span><b id="hud-planet">—</b></div>
+        <div class="row"><span>CLASSE</span><b id="hud-class">—</b></div>
+        <div class="row"><span>BIOMA</span><b id="hud-biome">—</b></div>
+        <div class="row"><span>LAT</span><b id="hud-lat">0.0°</b></div>
+        <div class="row"><span>LON</span><b id="hud-lon">0.0°</b></div>
+        <div class="row"><span>CATÁLOGO</span><b id="hud-catalog">—</b></div>
+      </section>
+
+      <!-- Inventário -->
+      <section class="panel panel--br">
+        <header>CARGA <em id="hud-slots">0/8</em></header>
+        <div class="units">
+          <span id="hud-units">0</span><i>unidades</i>
+        </div>
+        <ul id="hud-items" class="items">
+          <li class="empty">vazio</li>
+        </ul>
+      </section>
+
+      <!-- Performance -->
+      <section class="panel panel--bl">
+        <div class="row"><span>FPS</span><b id="hud-fps">0</b></div>
+        <div class="row"><span>CHUNKS</span><b id="hud-chunks">0</b></div>
+        <div class="row"><span>FILA</span><b id="hud-queue">0</b></div>
+        <div class="row"><span>PROPS</span><b id="hud-props">0</b></div>
+        <div class="row"><span>CACHE</span><b id="hud-cache">0%</b></div>
+      </section>
+
+      <!-- Retículo com anel de progresso de extração -->
+      <div id="reticle">
+        <svg viewBox="0 0 100 100" aria-hidden="true">
+          <circle class="ret-ring" cx="50" cy="50" r="16" />
+          <circle id="mining-arc" class="ret-progress" cx="50" cy="50" r="16" />
+          <line x1="50" y1="20" x2="50" y2="30" />
+          <line x1="50" y1="70" x2="50" y2="80" />
+          <line x1="20" y1="50" x2="30" y2="50" />
+          <line x1="70" y1="50" x2="80" y2="50" />
+        </svg>
+      </div>
+
+      <!-- Prompt de interação contextual -->
+      <div id="prompt" class="hidden"></div>
+
+      <!-- Avisos e descobertas -->
+      <div id="hud-banner"></div>
+      <div id="discovery" class="hidden">
+        <div class="disc-tag">DESCOBERTA REGISTRADA</div>
+        <div class="disc-name" id="disc-name">—</div>
+        <div class="disc-sub" id="disc-sub">—</div>
+        <div class="disc-units" id="disc-units">+0 unidades</div>
+      </div>
+    </div>
+
+    <!-- ================= Tela inicial ================= -->
+    <div id="overlay">
+      <div class="overlay-inner">
+        <h1>PROJETO <span>ODYSSEY</span></h1>
+        <p class="tagline">Proof of Concept — universo procedural sem telas de carregamento</p>
+
+        <div id="boot-status">Gerando sistema estelar…</div>
+
+        <button id="start-btn" disabled>INICIAR VOO</button>
+
+        <div class="controls-grid">
+          <div class="controls-col">
+            <h2>NAVE</h2>
+            <ul class="controls">
+              <li><kbd>Mouse</kbd> Arfagem / guinada</li>
+              <li><kbd>A</kbd><kbd>D</kbd> Rolagem</li>
+              <li><kbd>W</kbd><kbd>S</kbd> Acelerar / desacelerar</li>
+              <li><kbd>Shift</kbd> Booster</li>
+              <li><kbd>X</kbd> Pulse drive (interplanetário)</li>
+              <li><kbd>Espaço</kbd> Freio de inércia</li>
+              <li><kbd>G</kbd> Piloto automático: mergulho</li>
+              <li><kbd>C</kbd> Câmera 3ª pessoa / cockpit</li>
+            </ul>
+          </div>
+          <div class="controls-col">
+            <h2>A PÉ</h2>
+            <ul class="controls">
+              <li><kbd>F</kbd> Sair da nave / embarcar</li>
+              <li><kbd>W A S D</kbd> Caminhar</li>
+              <li><kbd>Shift</kbd> Correr</li>
+              <li><kbd>Espaço</kbd> Pular / jetpack</li>
+              <li><kbd>V</kbd> Pulso de varredura</li>
+              <li><kbd>Mouse esq.</kbd> Feixe de mineração</li>
+              <li><kbd>F3</kbd> Wireframe (ver LOD)</li>
+              <li><kbd>Esc</kbd> Libera o cursor</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

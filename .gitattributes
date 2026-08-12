@@ -1,0 +1,19 @@
+# Normaliza quebras de linha no repositório.
+#
+# Sem isso, o Windows commita CRLF e quem clonar em Linux/Mac vê o arquivo
+# inteiro marcado como alterado em qualquer diff. Guardamos sempre LF no
+# repositório; o checkout local continua usando a convenção do sistema.
+* text=auto eol=lf
+
+# Scripts do PowerShell mantêm CRLF por convenção do Windows.
+*.ps1 text eol=crlf
+
+# Binários: nunca converter.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.woff binary
+*.woff2 binary

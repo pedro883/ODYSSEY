@@ -1,0 +1,101 @@
+# =============================================================================
+# Configuração de Apache para hospedagem compartilhada (Hostinger, cPanel etc.)
+#
+# Este arquivo fica em `public/`, que o Vite copia inteiro para dentro de
+# `dist/` no build. Ou seja: ele sobe junto com o site automaticamente.
+#
+# Todo bloco está protegido por <IfModule>. Numa hospedagem compartilhada você
+# não controla quais módulos do Apache estão ativos, e uma diretiva de módulo
+# ausente derruba o site inteiro com erro 500 — não é o tipo de surpresa que se
+# quer descobrir em produção.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Tipos MIME
+#
+# Os Web Workers deste projeto são ES modules (`new Worker(url, {type:'module'})`).
+# O navegador RECUSA carregar um módulo servido com MIME errado (text/plain,
+# por exemplo) e o terreno simplesmente nunca aparece — sem erro óbvio na tela,
+# só uma mensagem no console. Declarar explicitamente evita depender da config
+# padrão do servidor.
+# -----------------------------------------------------------------------------
+<IfModule mod_mime.c>
+  AddType text/javascript                 .js .mjs
+  AddType text/css                        .css
+  AddType image/svg+xml                   .svg
+  AddType application/json                .json
+</IfModule>
+
+# -----------------------------------------------------------------------------
+# Compressão
+#
+# O bundle tem ~608 kB, mas ~159 kB com gzip. É a diferença mais barata que
+# existe entre um carregamento rápido e um lento.
+# -----------------------------------------------------------------------------
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/css text/javascript
+  AddOutputFilterByType DEFLATE application/javascript application/json
+  AddOutputFilterByType DEFLATE image/svg+xml
+</IfModule>
+
+# Se o servidor tiver Brotli, ele comprime melhor que gzip.
+<IfModule mod_brotli.c>
+  AddOutputFilterByType BROTLI_COMPRESS text/html text/css text/javascript
+  AddOutputFilterByType BROTLI_COMPRESS application/javascript application/json
+</IfModule>
+
+# -----------------------------------------------------------------------------
+# Cache
+#
+# O Vite põe um hash no nome de cada asset (`index-U35W8ZWd.js`). Quando o
+# conteúdo muda, o NOME muda — então esses arquivos podem ser cacheados para
+# sempre sem risco de servir versão velha.
+#
+# O `index.html` é a exceção: ele é quem aponta para os nomes com hash, então
+# precisa ser sempre revalidado. Cachear o index é o erro clássico que faz o
+# usuário continuar vendo a versão antiga depois de um deploy.
+# -----------------------------------------------------------------------------
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType text/javascript           "access plus 1 year"
+  ExpiresByType application/javascript    "access plus 1 year"
+  ExpiresByType text/css                  "access plus 1 year"
+  ExpiresByType image/svg+xml             "access plus 1 month"
+  ExpiresByType text/html                 "access plus 0 seconds"
+</IfModule>
+
+<IfModule mod_headers.c>
+  <FilesMatch "\.(js|mjs|css|svg|woff2?)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+  <FilesMatch "\.html$">
+    Header set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+</IfModule>
+
+# -----------------------------------------------------------------------------
+# Força HTTPS
+#
+# A Hostinger dá certificado SSL gratuito. Além da segurança, várias APIs de
+# navegador só funcionam em contexto seguro, e é o que evita aviso de "site não
+# seguro" ao pedir o cursor (pointer lock) no clique inicial.
+#
+# Comente este bloco se ainda não tiver ativado o SSL no painel — senão o site
+# entra em loop de redirecionamento.
+# -----------------------------------------------------------------------------
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  # Não redireciona em desenvolvimento local (XAMPP serve por http).
+  # Sem estas duas linhas, testar o build em http://localhost/NMS/dist/
+  # dispara um redirect para https://localhost/ que não existe.
+  RewriteCond %{HTTP_HOST} !^localhost [NC]
+  RewriteCond %{HTTP_HOST} !^127\.0\.0\.1
+  RewriteCond %{HTTPS} !=on
+  RewriteCond %{HTTP:X-Forwarded-Proto} !https
+  RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+</IfModule>
+
+# -----------------------------------------------------------------------------
+# Página inicial
+# -----------------------------------------------------------------------------
+DirectoryIndex index.html

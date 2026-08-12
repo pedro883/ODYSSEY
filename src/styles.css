@@ -1,0 +1,481 @@
+/* =========================================================================
+   HUD minimalista. Tudo aqui e overlay HTML/CSS puro sobre o canvas WebGL —
+   nenhum texto e desenhado dentro da cena 3D (mais barato e mais legivel).
+   ========================================================================= */
+
+:root {
+  --accent: #58e8ff;
+  --accent-dim: #1c6d7d;
+  --warn: #ffb44d;
+  --shield: #6cf0a8;
+  --jet: #a98bff;
+  --gold: #ffd77a;
+  --bg-panel: rgba(4, 12, 20, 0.55);
+  --border: rgba(88, 232, 255, 0.28);
+  --text: #cfeef7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  color: var(--text);
+  font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#viewport {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ------------------------------- HUD ------------------------------------ */
+
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 0.6s ease;
+}
+
+#hud.hidden {
+  opacity: 0;
+}
+
+.panel {
+  position: absolute;
+  min-width: 200px;
+  padding: 12px 14px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  backdrop-filter: blur(6px);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  /* Recorte diagonal no canto — visual "sci-fi" sem custo de imagem */
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%);
+}
+
+.panel--tl { top: 20px; left: 20px; }
+.panel--tr { top: 20px; right: 20px; text-align: right; }
+.panel--bl { bottom: 20px; left: 20px; min-width: 150px; }
+.panel--br { bottom: 20px; right: 20px; min-width: 220px; }
+
+.panel header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  color: var(--accent);
+  opacity: 0.75;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 5px;
+}
+
+.panel header em {
+  font-style: normal;
+  letter-spacing: 0.1em;
+  opacity: 0.8;
+}
+
+.panel .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  line-height: 1.7;
+}
+
+.panel--tr .row { flex-direction: row-reverse; }
+
+.row span {
+  opacity: 0.5;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  align-self: center;
+}
+
+.row b {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+}
+
+.row i {
+  font-style: normal;
+  opacity: 0.4;
+  font-size: 10px;
+  align-self: center;
+}
+
+.meter { margin-top: 9px; }
+.meter.off { display: none; }
+
+.meter label {
+  display: block;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  opacity: 0.5;
+  margin-bottom: 3px;
+}
+
+.bar {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.09);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 2px;
+  transition: width 0.12s linear;
+}
+
+.fill--throttle { background: linear-gradient(90deg, var(--accent-dim), var(--accent)); }
+.fill--shield   { background: linear-gradient(90deg, #227a52, var(--shield)); }
+.fill--atmo     { background: linear-gradient(90deg, #7a4b16, var(--warn)); }
+.fill--jetpack  { background: linear-gradient(90deg, #4b3b86, var(--jet)); }
+
+/* ----------------------------- Inventário -------------------------------- */
+
+.units {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.units span {
+  font-size: 20px;
+  font-weight: 300;
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+}
+
+.units i {
+  font-style: normal;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  opacity: 0.45;
+}
+
+.items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+}
+
+.items li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  line-height: 1.9;
+}
+
+.items li.empty {
+  opacity: 0.3;
+  font-style: italic;
+}
+
+.items .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+
+.items .qty {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+/* ------------------------------ Reticulo -------------------------------- */
+
+#reticle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 64px;
+  height: 64px;
+  transform: translate(-50%, -50%);
+}
+
+#reticle svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  opacity: 0.55;
+}
+
+.ret-progress {
+  stroke: var(--warn);
+  stroke-width: 4;
+  /* 2*pi*r = 100.5 — usamos o dash para desenhar o arco de progresso */
+  stroke-dasharray: 100.5;
+  stroke-dashoffset: 100.5;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+}
+
+/* ------------------------------- Prompt --------------------------------- */
+
+#prompt {
+  position: absolute;
+  bottom: 22%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 16px;
+  border: 1px solid var(--border);
+  background: rgba(4, 12, 20, 0.6);
+  border-radius: 3px;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  white-space: nowrap;
+  transition: opacity 0.2s ease;
+}
+
+#prompt.hidden { opacity: 0; }
+
+#prompt b {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ------------------------------- Banner --------------------------------- */
+
+#hud-banner {
+  position: absolute;
+  top: 18%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 15px;
+  letter-spacing: 0.3em;
+  color: var(--warn);
+  text-shadow: 0 0 18px rgba(255, 180, 77, 0.55);
+  opacity: 0;
+  transition: opacity 0.5s ease;
+  white-space: nowrap;
+}
+
+#hud-banner.show { opacity: 1; }
+
+/* ----------------------------- Descoberta -------------------------------- */
+
+#discovery {
+  position: absolute;
+  top: 28%;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  transition: opacity 0.45s ease;
+  padding: 14px 34px;
+  border-top: 1px solid rgba(255, 215, 122, 0.4);
+  border-bottom: 1px solid rgba(255, 215, 122, 0.4);
+  background: linear-gradient(180deg, rgba(255, 215, 122, 0.06), rgba(255, 215, 122, 0));
+}
+
+#discovery.hidden { opacity: 0; }
+
+.disc-tag {
+  font-size: 9px;
+  letter-spacing: 0.4em;
+  color: var(--gold);
+  opacity: 0.75;
+}
+
+.disc-name {
+  font-size: 22px;
+  font-weight: 300;
+  letter-spacing: 0.08em;
+  margin: 6px 0 2px;
+  font-style: italic;
+}
+
+.disc-sub {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  opacity: 0.55;
+}
+
+.disc-units {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--gold);
+  letter-spacing: 0.1em;
+}
+
+/* ------------------------------ Marcadores ------------------------------- */
+
+#markers {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+  text-shadow: 0 0 8px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+  transition: opacity 0.25s ease;
+}
+
+.marker .glyph {
+  display: block;
+  width: 15px;
+  height: 15px;
+  margin: 0 auto 4px;
+  border: 1px solid currentColor;
+  transform: rotate(45deg);
+}
+
+.marker .label { display: block; font-weight: 600; }
+.marker .dist { display: block; opacity: 0.55; font-size: 9px; }
+
+.marker--ship { color: var(--warn); }
+.marker--ship .glyph { border-radius: 50%; transform: none; }
+.marker--moon { color: #b9c6d4; }
+
+/* --------------------------- Tela de abertura --------------------------- */
+
+#overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(ellipse at center, #071626 0%, #01050a 70%);
+  z-index: 10;
+  transition: opacity 0.8s ease;
+}
+
+#overlay.fade-out {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.overlay-inner {
+  text-align: center;
+  max-width: 720px;
+  padding: 24px;
+}
+
+.overlay-inner h1 {
+  font-size: 42px;
+  font-weight: 200;
+  letter-spacing: 0.42em;
+  margin: 0 0 6px;
+}
+
+.overlay-inner h1 span {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.tagline {
+  opacity: 0.45;
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  margin: 0 0 26px;
+}
+
+#boot-status {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  color: var(--accent);
+  opacity: 0.8;
+  height: 18px;
+  margin-bottom: 18px;
+}
+
+#start-btn {
+  pointer-events: auto;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 12px 40px;
+  font-size: 12px;
+  letter-spacing: 0.32em;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+  font-family: inherit;
+}
+
+#start-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: #01131a;
+  box-shadow: 0 0 26px rgba(88, 232, 255, 0.45);
+}
+
+#start-btn:disabled {
+  opacity: 0.25;
+  cursor: wait;
+}
+
+.controls-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 30px;
+  margin-top: 34px;
+  text-align: left;
+}
+
+.controls-col h2 {
+  font-size: 10px;
+  letter-spacing: 0.34em;
+  color: var(--accent);
+  opacity: 0.7;
+  margin: 0 0 10px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 5px;
+}
+
+.controls {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 7px;
+  font-size: 11px;
+  opacity: 0.55;
+}
+
+.controls li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 20px;
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  font-family: 'Cascadia Mono', 'Consolas', monospace;
+  font-size: 10px;
+  text-align: center;
+}

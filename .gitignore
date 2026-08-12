@@ -1,0 +1,33 @@
+# Dependências — reinstaláveis com `npm install` a partir do package-lock.json.
+# São dezenas de MB e milhares de arquivos; nunca vão para o repositório.
+node_modules/
+
+# Saída de build — gerada por `npm run build`. Versionar build gera conflito
+# em todo merge e incha o histórico com arquivos minificados.
+dist/
+
+# Pacote de deploy gerado por `npm run zip`.
+odyssey-deploy.zip
+
+# Ambiente e segredos
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs e caches de ferramentas
+*.log
+npm-debug.log*
+.vite/
+.cache/
+
+# Sistema operacional
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Editores
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
