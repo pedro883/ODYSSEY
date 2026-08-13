@@ -4,6 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>NMS PoC — Universo Procedural</title>
+
+    <!--
+      Endereço da sala de multijogador.
+
+      Fica AQUI, e não no código, porque este arquivo é editável direto no
+      gerenciador de arquivos da hospedagem: trocar o servidor não exige
+      recompilar nem subir tudo de novo.
+
+      Vazio = o jogo procura uma sala local em desenvolvimento e roda em modo
+      solo quando publicado. Numa hospedagem com HTTPS o endereço PRECISA ser
+      `wss://` — o navegador bloqueia `ws://` numa página segura, e o erro é
+      silencioso o bastante para custar uma tarde.
+
+      Exemplo:  content="wss://seudominio.com/mp"
+    -->
+    <meta name="nms-mp-server" content="" />
+
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
@@ -45,9 +62,21 @@
         <div class="row"><span>PLANETA</span><b id="hud-planet">—</b></div>
         <div class="row"><span>CLASSE</span><b id="hud-class">—</b></div>
         <div class="row"><span>BIOMA</span><b id="hud-biome">—</b></div>
+        <div class="row"><span>FAUNA</span><b id="hud-fauna">—</b></div>
         <div class="row"><span>LAT</span><b id="hud-lat">0.0°</b></div>
         <div class="row"><span>LON</span><b id="hud-lon">0.0°</b></div>
         <div class="row"><span>CATÁLOGO</span><b id="hud-catalog">—</b></div>
+      </section>
+
+      <!--
+        Sala.
+
+        Escondido quando não há multijogador: um painel vazio escrito "SALA" só
+        ocupa canto de tela e faz o jogador procurar uma função que não existe.
+      -->
+      <section class="panel panel--room hidden" id="hud-room">
+        <header>SALA <em id="room-count">1</em></header>
+        <ul id="room-list" class="room-list"></ul>
       </section>
 
       <!-- Inventário -->
@@ -82,6 +111,34 @@
         </svg>
       </div>
 
+      <!--
+        Barra de construção.
+
+        A tira com TODAS as peças existe para responder, sem manual, a pergunta
+        "o que dá para construir?". Um seletor que só mostra a peça atual
+        esconde o catálogo inteiro atrás de quinze giros de roda do mouse.
+      -->
+      <div id="buildbar" class="hidden">
+        <ul id="build-list"></ul>
+        <div class="build-info">
+          <b id="build-name">—</b>
+          <span id="build-cost"></span>
+        </div>
+        <em class="build-hint">
+          <kbd>Botão esq.</kbd> construir <kbd>dir.</kbd> demolir
+          <kbd>R</kbd> girar <kbd>Q</kbd><kbd>E</kbd> peça <kbd>Tab</kbd> catálogo
+        </em>
+      </div>
+
+      <!--
+        Barra de equipamento.
+
+        Fica no centro inferior, acima do prompt: é o único elemento do HUD que
+        responde "o que meu clique faz agora?", e escondê-lo num canto anularia
+        a razão de os modos existirem.
+      -->
+      <div id="hotbar" class="hidden"><ul id="hotbar-list"></ul></div>
+
       <!-- Prompt de interação contextual -->
       <div id="prompt" class="hidden"></div>
 
@@ -95,11 +152,77 @@
       </div>
     </div>
 
+    <!--
+      ================= Painel (Tab) =================
+
+      Inventário e catálogo de construção na MESMA janela, em abas. Separá-los
+      em duas telas obrigaria a pessoa a fechar uma para conferir a outra
+      justamente quando a pergunta é "tenho ferrite para esta parede?" — a
+      única pergunta que atravessa as duas.
+    -->
+    <div id="painel" class="hidden">
+      <div class="painel-caixa">
+        <header class="painel-topo">
+          <nav class="painel-abas">
+            <button type="button" class="sel" data-aba="inventario">INVENTÁRIO</button>
+            <button type="button" data-aba="construcao">CONSTRUÇÃO</button>
+          </nav>
+          <div class="painel-unidades"><b id="painel-units">0</b><i>unidades</i></div>
+        </header>
+
+        <section id="aba-inventario" class="painel-corpo">
+          <div class="painel-sub">
+            <span id="painel-slots">0/8</span> slots ocupados
+          </div>
+          <ul id="painel-grade" class="grade-slots"></ul>
+        </section>
+
+        <section id="aba-construcao" class="painel-corpo hidden">
+          <div class="catalogo">
+            <ul id="catalogo-categorias"></ul>
+            <ul id="catalogo-pecas"></ul>
+          </div>
+        </section>
+
+        <footer class="painel-rodape"><kbd>Tab</kbd> fecha · clique numa peça para equipá-la</footer>
+      </div>
+    </div>
+
     <!-- ================= Tela inicial ================= -->
     <div id="overlay">
       <div class="overlay-inner">
         <h1>PROJETO <span>ODYSSEY</span></h1>
         <p class="tagline">Proof of Concept — universo procedural sem telas de carregamento</p>
+
+        <!--
+          Nome do piloto.
+
+          É um `form` de verdade, e não um input solto, para ganhar de graça o
+          comportamento que todo mundo espera: Enter envia. Sem isso, quem
+          digita o nome e aperta Enter fica olhando para uma tela que não faz
+          nada — e o botão está logo ali.
+        -->
+        <form id="pilot-form" autocomplete="off">
+          <label for="pilot-name">NOME DO PILOTO</label>
+          <input
+            id="pilot-name"
+            name="pilot-name"
+            type="text"
+            maxlength="16"
+            spellcheck="false"
+            placeholder="como quiser ser chamado"
+            aria-describedby="pilot-hint"
+          />
+          <input
+            id="pilot-pass"
+            name="pilot-pass"
+            type="password"
+            maxlength="64"
+            placeholder="senha (opcional — salva seu progresso)"
+            autocomplete="current-password"
+          />
+          <div id="pilot-hint">3 a 16 caracteres · letras, números, - e _</div>
+        </form>
 
         <div id="boot-status">Gerando sistema estelar…</div>
 
@@ -127,7 +250,10 @@
               <li><kbd>Shift</kbd> Correr</li>
               <li><kbd>Espaço</kbd> Pular / jetpack</li>
               <li><kbd>V</kbd> Pulso de varredura</li>
-              <li><kbd>Mouse esq.</kbd> Feixe de mineração</li>
+              <li><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> / <kbd>Roda</kbd> Equipamento</li>
+              <li><kbd>Mouse esq.</kbd> / <kbd>dir.</kbd> Usar a ferramenta</li>
+              <li><kbd>Tab</kbd> Inventário e construção</li>
+              <li><kbd>Q</kbd><kbd>E</kbd> Trocar peça · <kbd>R</kbd> girar</li>
               <li><kbd>F3</kbd> Wireframe (ver LOD)</li>
               <li><kbd>Esc</kbd> Libera o cursor</li>
             </ul>

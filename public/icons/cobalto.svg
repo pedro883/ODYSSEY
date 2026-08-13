@@ -1,0 +1,20 @@
+<!--
+  Cobalto — o mineral azul de valor médio, extraído de rocha.
+
+  Aglomerado de cristais: um grande e dois menores atrás. A silhueta irregular
+  é o que separa "cristal" de "lingote" (ferrite) num tamanho em que a cor já
+  não basta — daltonismo vermelho-verde não atrapalha aqui, mas azul e cinza
+  ficam parecidos em telas apagadas.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="Cobalto">
+  <title>Cobalto</title>
+  <!-- cristais de trás -->
+  <path d="M9 42 L12 22 L19 27 L18 42 Z" fill="#2d5bb5" />
+  <path d="M30 42 L31 25 L39 20 L41 42 Z" fill="#2d5bb5" />
+  <!-- cristal principal -->
+  <path d="M18 42 L20 14 L27 6 L32 16 L31 42 Z" fill="#4a86ff" />
+  <!-- faceta iluminada -->
+  <path d="M20 14 L27 6 L27 40 L20 40 Z" fill="#8ab4ff" opacity="0.75" />
+  <!-- realce especular -->
+  <path d="M22 16 L25 11 L25 30 L22 32 Z" fill="#d9e7ff" opacity="0.6" />
+</svg>

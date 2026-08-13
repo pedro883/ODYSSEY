@@ -43,6 +43,7 @@ export class HUD {
       planet: el('hud-planet'),
       class: el('hud-class'),
       biome: el('hud-biome'),
+      fauna: el('hud-fauna'),
       lat: el('hud-lat'),
       lon: el('hud-lon'),
       catalog: el('hud-catalog'),
@@ -68,6 +69,45 @@ export class HUD {
     };
 
     this.itemList = el('hud-items');
+
+    this.room = {
+      root: el('hud-room'),
+      count: el('room-count'),
+      list: el('room-list'),
+      /** Última lista desenhada, para não reconstruir DOM a cada frame. */
+      assinatura: '',
+    };
+
+    this.build = {
+      root: el('buildbar'),
+      list: el('build-list'),
+      name: el('build-name'),
+      cost: el('build-cost'),
+      /** Itens da tira, criados uma vez. @type {HTMLElement[]} */
+      chips: [],
+      selecionado: -1,
+      assinatura: '',
+    };
+
+    this.hotbar = { root: el('hotbar'), list: el('hotbar-list'), chips: [], atual: -1 };
+
+    this.painel = {
+      root: el('painel'),
+      abas: [...document.querySelectorAll('.painel-abas button')],
+      secoes: {
+        inventario: el('aba-inventario'),
+        construcao: el('aba-construcao'),
+      },
+      units: el('painel-units'),
+      slots: el('painel-slots'),
+      grade: el('painel-grade'),
+      categorias: el('catalogo-categorias'),
+      pecas: el('catalogo-pecas'),
+      aba: 'inventario',
+      categoria: null,
+      montado: false,
+      assinatura: '',
+    };
 
     this._accumulator = 0;
     this._bannerTimer = 0;
@@ -127,6 +167,9 @@ export class HUD {
     this._set('planet', data.planetName);
     this._set('class', data.planetClass);
     this._set('biome', data.biome);
+    // Fora do alcance da fauna o campo mostra "—" em vez de "0": zero sugere um
+    // mundo estéril, quando a verdade é que ainda estamos alto demais para ver.
+    this._set('fauna', data.faunaAtiva ? `${data.fauna} · ${data.faunaEspecies}` : '—');
     this._set('lat', `${data.latitude.toFixed(1)}°`);
     this._set('lon', `${data.longitude.toFixed(1)}°`);
     this._set('catalog', data.cataloged ? 'REGISTRADO' : 'DESCONHECIDO');
@@ -172,6 +215,260 @@ export class HUD {
    * @param {THREE.Camera} camera
    * @param {Array<{id:string, position:THREE.Vector3, label:string, sub:string, kind:string}>} list
    */
+  /**
+   * Painel da sala: quem está online, onde e a que distância.
+   *
+   * O texto inteiro é remontado só quando MUDA. A lista roda a 60 Hz e trocar
+   * `innerHTML` a cada frame descartaria e recriaria os nós — o que, além de
+   * caro, mata a seleção de texto e faz o navegador reflowar a tela toda.
+   * Comparar uma assinatura de string custa quase nada e evita tudo isso.
+   *
+   * @param {{nome:string, distancia:number|null, local:string, eu:boolean}[]} jogadores
+   */
+  updateRoom(sala) {
+    if (!sala) {
+      this.room.root.classList.add('hidden');
+      return;
+    }
+
+    const { estado, jogadores } = sala;
+    this.room.root.classList.remove('hidden');
+
+    // O contador mostra o ESTADO quando não há sala. Antes o painel inteiro
+    // ficava escondido enquanto não conectasse — e quem abria o jogo sem
+    // servidor no ar não via nada, nem soube que existia um multijogador para
+    // ligar. "Nenhum jogador" e "não estou vendo a sala" são coisas
+    // diferentes, e a interface tem de saber dizer qual é qual.
+    this.room.count.textContent =
+      estado === 'online' ? String(jogadores.length) : estado === 'conectando' ? '…' : 'OFFLINE';
+
+    const assinatura = estado + jogadores.map((j) => `${j.nome}|${j.local}`).join(';');
+    if (assinatura === this.room.assinatura) return;
+    this.room.assinatura = assinatura;
+
+    if (estado !== 'online') {
+      this.room.list.innerHTML =
+        '<li class="offline"><span class="quem">sala indisponível</span><span class="onde">npm run mp</span></li>';
+      return;
+    }
+
+    this.room.list.innerHTML = jogadores
+      .map((jogador) => {
+        const classes = [jogador.eu ? 'eu' : '', jogador.longe ? 'longe' : ''].filter(Boolean).join(' ');
+        return `<li class="${classes}"><span class="quem">${escapar(jogador.nome)}</span><span class="onde">${escapar(jogador.local)}</span></li>`;
+      })
+      .join('');
+  }
+
+  /**
+   * Barra de construção.
+   *
+   * A tira de peças é criada UMA vez, na primeira chamada, e depois só troca de
+   * classe. Recriá-la por frame seria refazer 15 nós de DOM a 60 Hz para mudar
+   * uma borda de cor.
+   *
+   * @param {{ativo:boolean, pecas:Array, selecao:number, custo:string,
+   *          valido:boolean, motivo:string|null}|null} estado
+   */
+  updateBuild(estado) {
+    if (!estado?.ativo) {
+      this.build.root.classList.add('hidden');
+      return;
+    }
+    this.build.root.classList.remove('hidden');
+
+    if (this.build.chips.length === 0) {
+      this.build.list.innerHTML = estado.pecas
+        .map((p, i) => `<li data-i="${i}"><i>${i < 9 ? i + 1 : ''}</i>${escapar(p.nome)}</li>`)
+        .join('');
+      this.build.chips = [...this.build.list.children];
+    }
+
+    if (this.build.selecionado !== estado.selecao) {
+      this.build.chips[this.build.selecionado]?.classList.remove('sel');
+      this.build.chips[estado.selecao]?.classList.add('sel');
+      this.build.selecionado = estado.selecao;
+      // Mantém a peça escolhida visível quando a tira passa da largura da tela.
+      this.build.chips[estado.selecao]?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    }
+
+    // O motivo da recusa entra no lugar do custo: "ocupado" e "recursos
+    // insuficientes" são as duas únicas perguntas que o jogador faz ao ver o
+    // fantasma vermelho, e responder na mesma linha evita mais um aviso na tela.
+    const texto = estado.valido ? estado.custo : (estado.motivo ?? estado.custo);
+    const assinatura = `${estado.selecao}|${texto}|${estado.valido}`;
+    if (assinatura === this.build.assinatura) return;
+    this.build.assinatura = assinatura;
+
+    this.build.name.textContent = estado.pecas[estado.selecao]?.nome ?? '—';
+    this.build.cost.textContent = texto;
+    this.build.cost.classList.toggle('erro', !estado.valido);
+  }
+
+  /* ===================================================================== */
+  /* Barra de equipamento                                                  */
+  /* ===================================================================== */
+
+  updateHotbar(estado) {
+    if (!estado) {
+      this.hotbar.root.classList.add('hidden');
+      return;
+    }
+    this.hotbar.root.classList.remove('hidden');
+
+    if (this.hotbar.chips.length === 0) {
+      this.hotbar.list.innerHTML = estado.ferramentas
+        .map(
+          (f, i) =>
+            `<li style="--cor:#${f.cor.toString(16).padStart(6, '0')}"><i>${i + 1}</i><span>${escapar(f.nome)}</span></li>`
+        )
+        .join('');
+      this.hotbar.chips = [...this.hotbar.list.children];
+    }
+
+    if (this.hotbar.atual !== estado.atual) {
+      this.hotbar.chips[this.hotbar.atual]?.classList.remove('sel');
+      this.hotbar.chips[estado.atual]?.classList.add('sel');
+      this.hotbar.atual = estado.atual;
+    }
+  }
+
+  /* ===================================================================== */
+  /* Painel                                                                */
+  /* ===================================================================== */
+
+  /**
+   * Liga os cliques do painel.
+   *
+   * Recebe callbacks em vez de tocar no jogo direto: o HUD não conhece
+   * `BuildSystem` nem `Inventory`, e mantê-lo assim é o que impede a interface
+   * de virar um segundo lugar onde regras de jogo moram.
+   */
+  ligarPainel({ aoEscolherPeca }) {
+    for (const botao of this.painel.abas) {
+      botao.addEventListener('click', () => this._trocarAba(botao.dataset.aba));
+    }
+    this.painel.pecas.addEventListener('click', (evento) => {
+      const item = evento.target.closest('li[data-i]');
+      if (!item || item.classList.contains('indisponivel')) return;
+      aoEscolherPeca(Number(item.dataset.i));
+    });
+    this.painel.categorias.addEventListener('click', (evento) => {
+      const item = evento.target.closest('li[data-cat]');
+      if (!item) return;
+      this.painel.categoria = item.dataset.cat;
+      this.painel.assinatura = ''; // força o redesenho da lista
+    });
+  }
+
+  _trocarAba(aba) {
+    this.painel.aba = aba;
+    for (const botao of this.painel.abas) {
+      botao.classList.toggle('sel', botao.dataset.aba === aba);
+    }
+    for (const [nome, secao] of Object.entries(this.painel.secoes)) {
+      secao.classList.toggle('hidden', nome !== aba);
+    }
+  }
+
+  mostrarPainel(aberto) {
+    this.painel.root.classList.toggle('hidden', !aberto);
+  }
+
+  /**
+   * Redesenha o painel aberto.
+   *
+   * Roda a 60 Hz enquanto o painel está na tela, então tudo passa por uma
+   * assinatura: sem ela seriam 27 cartões de peça recriados por frame só para
+   * a contagem de ferrite continuar a mesma.
+   */
+  atualizarPainel({ inventario, build, recursos }) {
+    const porId = new Map(recursos.map((r) => [r.id, r]));
+
+    if (!this.painel.montado) {
+      this._montarCatalogo(build, porId);
+      this.painel.montado = true;
+    }
+
+    const itens = inventario.entries();
+    const assinatura =
+      `${this.painel.categoria}|${inventario.units}|${build.selecao}|` +
+      itens.map((i) => `${i.id}:${i.amount}`).join(',');
+    if (assinatura === this.painel.assinatura) return;
+    this.painel.assinatura = assinatura;
+
+    this.painel.units.textContent = inventario.units.toLocaleString('pt-BR');
+    this.painel.slots.textContent = `${inventario.slotsUsed}/${inventario.slots}`;
+
+    // --- Grade do inventário ------------------------------------------------
+    // Slots vazios entram como células mudas. Mostrar só o que existe esconde a
+    // informação mais útil do painel: quanto espaço ainda cabe.
+    const celulas = [];
+    for (const item of itens) {
+      const recurso = porId.get(item.id);
+      celulas.push(
+        `<li class="slot cheio">
+           <img src="${import.meta.env.BASE_URL}icons/${recurso?.icone ?? ''}" alt="" width="48" height="48" />
+           <span class="slot-nome">${escapar(item.nome)}</span>
+           <span class="slot-qtd">${item.amount}</span>
+           <span class="slot-pilha">${item.stacks} pilha${item.stacks > 1 ? 's' : ''}</span>
+         </li>`
+      );
+    }
+    for (let i = celulas.length; i < inventario.slots; i++) {
+      celulas.push('<li class="slot vazio"></li>');
+    }
+    this.painel.grade.innerHTML = celulas.join('');
+
+    this._pintarPecas(build, porId);
+  }
+
+  _montarCatalogo(build, porId) {
+    const categorias = build.categorias;
+    this.painel.categoria = this.painel.categoria ?? categorias[0]?.id;
+    this.painel.categorias.innerHTML = categorias
+      .map((c) => `<li data-cat="${c.id}"><b>${escapar(c.nome)}</b><i>${escapar(c.resumo)}</i></li>`)
+      .join('');
+  }
+
+  _pintarPecas(build, porId) {
+    for (const item of this.painel.categorias.children) {
+      item.classList.toggle('sel', item.dataset.cat === this.painel.categoria);
+    }
+
+    const lista = build.pecas
+      .map((p, i) => ({ p, i }))
+      .filter(({ p }) => p.categoria === this.painel.categoria);
+
+    this.painel.pecas.innerHTML = lista
+      .map(({ p, i }) => {
+        const custo = Object.entries(p.custo)
+          .map(([id, qtd]) => {
+            const recurso = porId.get(id);
+            const tem = build.inventory.count(id);
+            const falta = tem < qtd;
+            return `<span class="custo${falta ? ' falta' : ''}" title="${escapar(recurso?.nome ?? id)}">
+                      <img src="${import.meta.env.BASE_URL}icons/${recurso?.icone ?? ''}" alt="${escapar(recurso?.nome ?? id)}" width="20" height="20" />
+                      <b>${tem}</b>/<i>${qtd}</i>
+                    </span>`;
+          })
+          .join('');
+
+        const disponivel = Object.entries(p.custo).every(([id, qtd]) => build.inventory.count(id) >= qtd);
+        const classes = [
+          i === build.selecao ? 'sel' : '',
+          disponivel ? '' : 'indisponivel',
+        ].filter(Boolean).join(' ');
+
+        return `<li data-i="${i}" class="${classes}">
+                  <img class="miniatura" src="${build.miniatura(p.id)}" alt="" />
+                  <span class="peca-nome">${escapar(p.nome)}</span>
+                  <span class="peca-custo">${custo}</span>
+                </li>`;
+      })
+      .join('');
+  }
+
   updateMarkers(camera, list) {
     const seen = new Set();
     const halfW = window.innerWidth / 2;
@@ -180,16 +477,35 @@ export class HUD {
     for (const item of list) {
       _projected.copy(item.position).project(camera);
 
-      // z > 1 significa atrás da câmera: projetar assim mesmo colocaria o
-      // marcador espelhado no lado errado da tela.
-      if (_projected.z > 1) continue;
+      // ---------------------------------------------------------------------
+      // ATRÁS DA CÂMERA (z > 1): ESPELHAR, NÃO ESCONDER.
+      //
+      // A projeção de um ponto atrás do olho sai invertida — usá-la crua põe o
+      // marcador no lado errado da tela. A versão anterior simplesmente
+      // descartava esses pontos, e o efeito era o oposto do que um marcador
+      // serve: o companheiro sumia da interface exatamente quando você virava
+      // de costas para ele, que é quando você mais precisa saber para onde
+      // voltar. E o rótulo congelava com a última distância vista.
+      //
+      // Negar as coordenadas desfaz a inversão; o clamp abaixo encosta o
+      // marcador na borda do lado certo.
+      // ---------------------------------------------------------------------
+      const atras = _projected.z > 1;
+      if (atras) {
+        _projected.x = -_projected.x;
+        _projected.y = -_projected.y;
+      }
 
       const x = (_projected.x * 0.5 + 0.5) * window.innerWidth;
       const y = (-_projected.y * 0.5 + 0.5) * window.innerHeight;
 
       // Mantém o marcador dentro da tela, com uma margem, para não sumir
-      // exatamente quando o jogador precisa dele.
-      const cx = Math.max(40, Math.min(window.innerWidth - 40, x));
+      // exatamente quando o jogador precisa dele. Quem está atrás vai
+      // obrigatoriamente para a borda: um alvo às suas costas desenhado no meio
+      // da tela seria uma mentira.
+      const cx = atras
+        ? (x < window.innerWidth / 2 ? 40 : window.innerWidth - 40)
+        : Math.max(40, Math.min(window.innerWidth - 40, x));
       const cy = Math.max(30, Math.min(window.innerHeight - 30, y));
 
       let node = this._markers.get(item.id);
@@ -206,7 +522,9 @@ export class HUD {
       const dist = node.querySelector('.dist');
       if (label.textContent !== item.label) label.textContent = item.label;
       if (dist.textContent !== item.sub) dist.textContent = item.sub;
-      node.style.opacity = '1';
+      // Mais apagado quando está atrás: distingue "está ali" de "está para
+      // aquele lado" sem precisar de outro glifo.
+      node.style.opacity = atras ? '0.45' : '1';
       seen.add(item.id);
     }
 
@@ -251,6 +569,20 @@ function formatDistance(value) {
   if (abs >= 100000) return `${(value / 1000).toFixed(0)}k`;
   if (abs >= 10000) return `${(value / 1000).toFixed(1)}k`;
   return value.toFixed(0);
+}
+
+/**
+ * Escapa texto vindo de OUTRO jogador antes de ir para `innerHTML`.
+ *
+ * O nome chega pela rede e é escolhido por um desconhecido: sem isto, alguém
+ * entra na sala com um `<img onerror=...>` no nome e executa script na sua
+ * máquina. O servidor já corta o tamanho, mas confiar nele seria depender de
+ * uma validação que mora do outro lado do fio.
+ */
+function escapar(texto) {
+  return String(texto).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[c]);
 }
 
 function formatCount(value) {

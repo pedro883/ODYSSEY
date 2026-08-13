@@ -77,15 +77,26 @@ export class StarSystem {
 
     layout(rand).forEach((body, index) => {
       const planetSeed = (seed + index * 7919) >>> 0;
-      const planet = new Planet(planetSeed, scene, body.offset, this.pool, index);
 
-      // A escala do layout ajusta o raio depois do sorteio da config, para que
-      // luas sejam claramente menores que planetas.
-      if (body.scale !== 1) {
-        planet.config.radius *= body.scale;
-        planet.config.maxElevation *= body.scale;
-        planet.config.atmosphere.height *= body.scale;
-      }
+      // ---------------------------------------------------------------------
+      // A ESCALA VAI PARA DENTRO DA CONFIG, ANTES DE CONSTRUIR O PLANETA.
+      //
+      // Antes ela era aplicada AQUI, depois do `new Planet(...)` — e era um bug
+      // sério, ainda que silencioso. Quando esta linha rodava, o planeta já
+      // tinha:
+      //   - criado o `sampler` de colisão,
+      //   - enviado a config ao worker (structured clone: uma CÓPIA, que nunca
+      //     mais via a alteração feita aqui),
+      //   - construído as malhas de atmosfera e de nuvens.
+      //
+      // Ou seja: o terreno que você VÊ nascia com o raio sorteado, enquanto
+      // `sampleAt()` — que responde por altitude, gravidade, pouso e colisão —
+      // passava a usar o raio ESCALADO. Numa lua (escala 0,42) a nave
+      // atravessava o solo visível e só parava lá dentro; num planeta de escala
+      // 1,3 ela "pousava" a centenas de unidades no ar, e o jogo oferecia sair
+      // da nave no vazio.
+      // ---------------------------------------------------------------------
+      const planet = new Planet(planetSeed, scene, body.offset, this.pool, index, body.scale);
 
       planet.isMoon = !!body.moon;
       this.planets.push(planet);
@@ -148,11 +159,12 @@ export class StarSystem {
    *
    * @param {THREE.Vector3} cameraPosition
    * @param {Planet} active planeta em foco (recebe atualização completa)
+   * @param {number} elapsed segundos desde o boot
    */
-  updatePlanets(cameraPosition, active) {
+  updatePlanets(cameraPosition, active, elapsed) {
     for (const planet of this.planets) {
-      if (planet === active) planet.update(cameraPosition, this.sunDirection);
-      else planet.updateDistant(cameraPosition, this.sunDirection);
+      if (planet === active) planet.update(cameraPosition, this.sunDirection, elapsed);
+      else planet.updateDistant(cameraPosition, this.sunDirection, elapsed);
     }
   }
 

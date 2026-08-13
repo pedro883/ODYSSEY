@@ -68,9 +68,17 @@ function planetName(rand) {
 
 /**
  * @param {number} seed
+ * @param {number} scale multiplicador de tamanho do corpo (luas são menores)
+ *
+ *   Entra AQUI, e não depois, porque tudo o que importa deriva do raio:
+ *   elevação máxima, espessura da atmosfera, altura e tamanho das nuvens. Um
+ *   `config.radius *= escala` aplicado depois da construção do planeta deixa
+ *   essas grandezas dessincronizadas — e, pior, o worker já recebeu uma CÓPIA
+ *   da config e nunca fica sabendo (ver o comentário em `StarSystem.js`).
+ *
  * @returns {object} config serializável (atravessa structured-clone até o worker)
  */
-export function createPlanetConfig(seed) {
+export function createPlanetConfig(seed, scale = 1) {
   const rand = mulberry32(seed);
   const between = (a, b) => a + rand() * (b - a);
 
@@ -86,7 +94,10 @@ export function createPlanetConfig(seed) {
 
   const hasWater = type === 'temperado' || type === 'exótico' || (type === 'glacial' && rand() > 0.4);
 
-  const radius = between(2200, 3200);
+  // O sorteio acontece na escala 1 e só depois é multiplicado: assim a escala
+  // não consome números do gerador e o mesmo seed produz o MESMO mundo, grande
+  // ou pequeno. Trocar a ordem faria uma lua ser um planeta diferente.
+  const radius = between(2200, 3200) * scale;
   const maxElevation = radius * between(0.022, 0.042);
 
   // --- Paleta ------------------------------------------------------------
@@ -109,6 +120,36 @@ export function createPlanetConfig(seed) {
     tundra: hslToLinear((vegHue + 0.08) % 1, 0.18, 0.42),
     rock: hslToLinear(soilHue, 0.12, type === 'vulcânico' ? 0.16 : 0.30),
     snow: toLinear(0xf2f7ff),
+  };
+
+  // --- Folhagem ------------------------------------------------------------
+  // Separada de `palette.grass` de propósito. Usar a cor do gramado em toda a
+  // vegetação era o motivo de TODA árvore sair do mesmo verde chapado: um só
+  // valor, aplicado a copa, arbusto e folha, em todos os planetas.
+  //
+  // Aqui a folhagem ganha um matiz PRÓPRIO, um desvio por espécie e uma faixa
+  // de variação por indivíduo. É o mesmo princípio da paleta do terreno — a
+  // coerência vem do matiz base, a vida vem do desvio — só que aplicado à
+  // camada que o jogador vê de perto, que é onde a falta dela salta aos olhos.
+  const foliageHue =
+    type === 'exótico' ? (baseHue + 0.42) % 1 :
+    type === 'vulcânico' ? between(0.02, 0.08) :
+    type === 'glacial' ? between(0.28, 0.42) :
+    between(0.16, 0.36);
+
+  // Quanto o matiz pode andar entre uma árvore e outra. Um pouco de outono num
+  // mundo temperado; num mundo exótico, quase nada — lá a estranheza vem da
+  // saturação, e espalhar o matiz só suja a paleta.
+  const foliageSpread = type === 'exótico' ? 0.05 : between(0.06, 0.14);
+
+  const foliage = {
+    hue: foliageHue,
+    spread: foliageSpread,
+    saturation: type === 'exótico' ? 0.78 : type === 'glacial' ? 0.34 : between(0.42, 0.62),
+    lightness: type === 'vulcânico' ? 0.24 : between(0.30, 0.44),
+    // Casca: marrom real, nunca a cor da paleta. Tronco verde é o que mais
+    // denuncia vegetação tingida por cima.
+    bark: hslToLinear(between(0.05, 0.10), between(0.18, 0.38), between(0.20, 0.34)),
   };
 
   // --- Atmosfera ---------------------------------------------------------
@@ -135,6 +176,39 @@ export function createPlanetConfig(seed) {
 
   const sunColor = toLinear(type === 'vulcânico' ? 0xffd0a0 : 0xfff4e2);
 
+  // --- Nuvens --------------------------------------------------------------
+  // A base fica ACIMA do pico mais alto possível (`maxElevation` é o teto do
+  // relevo), senão a camada atravessaria montanhas — e ver uma cordilheira
+  // furar uma nuvem por dentro entrega o truque na hora.
+  const cloudBottom = maxElevation * 1.25 + radius * 0.008;
+  const cloudCoverage =
+    type === 'árido' ? between(0.12, 0.28) :
+    type === 'vulcânico' ? between(0.30, 0.48) :
+    type === 'glacial' ? between(0.45, 0.68) :
+    type === 'exótico' ? between(0.30, 0.60) :
+    between(0.35, 0.62);
+
+  const clouds = {
+    bottom: cloudBottom,
+    top: cloudBottom + atmosphere.height * between(0.28, 0.45),
+    coverage: cloudCoverage,
+    density: between(1.6, 2.6),
+    // Tamanho das massas em unidades de mundo. Proporcional ao raio para que a
+    // lua tenha nuvens de lua e não os mesmos cúmulos de um gigante.
+    featureScale: radius * between(0.055, 0.10),
+    // Vento em "features por segundo": lento de propósito. Nuvem que corre é
+    // a coisa que mais denuncia escala errada — a 200 unidades de altura, um
+    // cúmulo real leva minutos para cruzar o campo de visão.
+    wind: [between(-0.012, 0.012), 0, between(-0.012, 0.012)],
+    // Nuvem vulcânica é cinza de fuligem; as outras, brancas com um toque do
+    // matiz do céu, que é o que as integra à atmosfera em vez de deixá-las
+    // coladas por cima como adesivo.
+    color:
+      type === 'vulcânico'
+        ? hslToLinear(between(0.03, 0.08), 0.15, 0.30)
+        : hslToLinear(skyHue, 0.10, 0.86),
+  };
+
   return {
     seed,
     name: planetName(rand),
@@ -148,7 +222,9 @@ export function createPlanetConfig(seed) {
       type === 'árido' ? 1.15 : 1.0,
 
     palette,
+    foliage,
     atmosphere,
+    clouds,
     sunColor,
     waterColor: hslToLinear((baseHue + 0.53) % 1, 0.7, 0.22),
 

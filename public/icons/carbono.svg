@@ -1,0 +1,28 @@
+<!--
+  Carbono — vem da vegetação, é o recurso "orgânico".
+
+  Rede hexagonal de grafeno: seis nós e as ligações entre eles. É a imagem que
+  distingue carbono de "outra pedra cinza" sem depender só da cor, que aqui é
+  escura demais para carregar sozinha a identificação.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="Carbono">
+  <title>Carbono</title>
+  <path d="M24 6 L38 14 L38 30 L24 38 L10 30 L10 14 Z"
+        fill="#2b333c" stroke="#5c6873" stroke-width="2.5" stroke-linejoin="round" />
+  <!-- ligações internas -->
+  <g stroke="#7c8b98" stroke-width="2" stroke-linecap="round">
+    <path d="M24 6 L24 18" />
+    <path d="M24 18 L38 30" />
+    <path d="M24 18 L10 30" />
+  </g>
+  <!-- nós -->
+  <g fill="#a9b7c3">
+    <circle cx="24" cy="6" r="3" />
+    <circle cx="38" cy="14" r="3" />
+    <circle cx="38" cy="30" r="3" />
+    <circle cx="24" cy="38" r="3" />
+    <circle cx="10" cy="30" r="3" />
+    <circle cx="10" cy="14" r="3" />
+    <circle cx="24" cy="18" r="3.4" fill="#d3dde5" />
+  </g>
+</svg>

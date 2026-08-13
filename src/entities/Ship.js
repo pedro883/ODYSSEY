@@ -1,19 +1,56 @@
 /**
- * Modelo da nave, montado a partir de primitivas.
+ * Modelo da nave.
  *
- * Fica de propósito em geometria simples: o objetivo da PoC é o pipeline
- * procedural, não o asset. Para trocar por um modelo real, substitua o
- * conteúdo de `createShip()` por um `GLTFLoader` — o resto do código só
- * depende de `ship.group` (um Object3D) e de `ship.setThrust()`.
+ * Usa o `craft_speederA` do Kenney Space Kit quando disponível, e cai nas
+ * primitivas originais quando não (repositório sem `npm run assets`).
  *
- * Convenção: a nave aponta para -Z, que é a mesma direção "para frente" das
- * câmeras do Three.js. Isso deixa `getWorldDirection()` utilizável direto.
+ * CONVENÇÃO CRÍTICA: a nave aponta para **-Z**, igual às câmeras do Three.js.
+ * `ShipController._getForward()` depende disso. Os modelos do Kenney apontam
+ * para +Z, e a correção é aplicada AQUI, na importação — nunca no controlador,
+ * senão trocar de modelo vira uma caça ao bug dentro da física de voo.
+ *
+ * Independente da origem do visual, o resto do jogo só depende de
+ * `ship.group`, `ship.setThrust()` e `ship.dispose()`.
  */
 
 import * as THREE from 'three';
+import { assets } from '../assets/AssetLibrary.js';
+import { SHIP_MODEL } from '../assets/manifest.js';
+
+const _box = new THREE.Box3();
+const _size = new THREE.Vector3();
+const _center = new THREE.Vector3();
+
+/**
+ * Prepara o modelo carregado: escala para o tamanho de jogo, centra e corrige
+ * a orientação. Devolve null se o asset não existir.
+ */
+function buildModelHull() {
+  const scene = assets.getSceneSync(SHIP_MODEL.path);
+  if (!scene) return null;
+
+  const hull = scene.clone(true);
+  hull.rotation.y = SHIP_MODEL.yaw;
+  hull.updateMatrixWorld(true);
+
+  _box.setFromObject(hull);
+  _box.getSize(_size);
+  _box.getCenter(_center);
+
+  const escala = SHIP_MODEL.size / (Math.max(_size.x, _size.y, _size.z) || 1);
+  hull.scale.setScalar(escala);
+  // Centraliza no pivô: o modelo do Kenney tem a origem no chão, e uma nave
+  // girando em torno da barriga em vez do centro parece quebrada.
+  hull.position.set(-_center.x * escala, -_center.y * escala, -_center.z * escala);
+
+  const wrapper = new THREE.Group();
+  wrapper.add(hull);
+  return wrapper;
+}
 
 export function createShip() {
   const group = new THREE.Group();
+  const modelHull = buildModelHull();
 
   const hullMaterial = new THREE.MeshStandardMaterial({
     color: 0xb8c4cf,
@@ -42,45 +79,55 @@ export function createShip() {
     fog: false,
   });
 
-  // --- Fuselagem ----------------------------------------------------------
-  const fuselage = new THREE.Mesh(new THREE.ConeGeometry(0.62, 3.4, 10), hullMaterial);
-  fuselage.rotation.x = -Math.PI / 2; // cone nasce apontando +Y; giramos para -Z
-  fuselage.position.z = -0.3;
-  group.add(fuselage);
+  // --- Casco --------------------------------------------------------------
+  if (modelHull) {
+    group.add(modelHull);
+  } else {
+    // Fallback: a nave original feita de primitivas.
+    const fuselage = new THREE.Mesh(new THREE.ConeGeometry(0.62, 3.4, 10), hullMaterial);
+    fuselage.rotation.x = -Math.PI / 2; // cone nasce apontando +Y; giramos para -Z
+    fuselage.position.z = -0.3;
+    group.add(fuselage);
 
-  // --- Asas ---------------------------------------------------------------
-  const wingGeometry = new THREE.BoxGeometry(2.4, 0.09, 1.05);
-  for (const side of [-1, 1]) {
-    const wing = new THREE.Mesh(wingGeometry, hullMaterial);
-    wing.position.set(side * 1.35, -0.05, 0.55);
-    wing.rotation.z = side * 0.14; // leve diedro
-    wing.rotation.y = side * -0.18; // enflechamento
-    group.add(wing);
+    const wingGeometry = new THREE.BoxGeometry(2.4, 0.09, 1.05);
+    for (const side of [-1, 1]) {
+      const wing = new THREE.Mesh(wingGeometry, hullMaterial);
+      wing.position.set(side * 1.35, -0.05, 0.55);
+      wing.rotation.z = side * 0.14; // leve diedro
+      wing.rotation.y = side * -0.18; // enflechamento
+      group.add(wing);
 
-    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.5, 0.7), accentMaterial);
-    tip.position.set(side * 2.45, 0.16, 0.65);
-    group.add(tip);
+      const tip = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.5, 0.7), accentMaterial);
+      tip.position.set(side * 2.45, 0.16, 0.65);
+      group.add(tip);
+    }
+
+    const cockpit = new THREE.Mesh(new THREE.SphereGeometry(0.42, 16, 12), glassMaterial);
+    cockpit.scale.set(1, 0.72, 1.5);
+    cockpit.position.set(0, 0.28, -0.55);
+    group.add(cockpit);
   }
 
-  // --- Cockpit ------------------------------------------------------------
-  const cockpit = new THREE.Mesh(new THREE.SphereGeometry(0.42, 16, 12), glassMaterial);
-  cockpit.scale.set(1, 0.72, 1.5);
-  cockpit.position.set(0, 0.28, -0.55);
-  group.add(cockpit);
-
   // --- Motores ------------------------------------------------------------
+  // Continuam sendo primitivas mesmo com o modelo real: são efeito, não casco,
+  // e precisam responder ao acelerador. As posições saem do tamanho declarado
+  // da nave para acompanharem qualquer modelo que se coloque no manifesto.
   const engineGlows = [];
-  const nacelleGeometry = new THREE.CylinderGeometry(0.26, 0.3, 1.2, 10);
-  const glowGeometry = new THREE.CircleGeometry(0.24, 12);
+  const traseira = modelHull ? SHIP_MODEL.size * 0.42 : 1.76;
+  const lateral = modelHull ? SHIP_MODEL.size * 0.16 : 0.75;
+  const raioMotor = modelHull ? SHIP_MODEL.size * 0.075 : 0.24;
+  const glowGeometry = new THREE.CircleGeometry(raioMotor, 12);
 
   for (const side of [-1, 1]) {
-    const nacelle = new THREE.Mesh(nacelleGeometry, accentMaterial);
-    nacelle.rotation.x = Math.PI / 2;
-    nacelle.position.set(side * 0.75, -0.1, 1.15);
-    group.add(nacelle);
+    if (!modelHull) {
+      const nacelle = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.3, 1.2, 10), accentMaterial);
+      nacelle.rotation.x = Math.PI / 2;
+      nacelle.position.set(side * 0.75, -0.1, 1.15);
+      group.add(nacelle);
+    }
 
     const glow = new THREE.Mesh(glowGeometry, engineMaterial.clone());
-    glow.position.set(side * 0.75, -0.1, 1.76);
+    glow.position.set(side * lateral, -0.1, traseira);
     // O disco olha para +Z (para trás da nave), então fica visível de quem
     // está atrás — que é exatamente onde a câmera de 3ª pessoa vive.
     group.add(glow);

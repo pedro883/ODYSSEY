@@ -258,6 +258,377 @@ body {
   font-weight: 600;
 }
 
+/* --------------------------- Barra de construcao ------------------------- */
+
+#buildbar {
+  position: absolute;
+  bottom: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  /* A barra nasce larga por causa da tira de pecas; sem o limite ela empurra os
+     paineis de inventario em telas estreitas. */
+  max-width: min(760px, 76vw);
+  pointer-events: none;
+}
+
+#buildbar.hidden { display: none; }
+
+#build-list {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 5px;
+  list-style: none;
+  overflow-x: auto;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  border-radius: 3px;
+  backdrop-filter: blur(3px);
+  /* A tira rola sozinha ate a peca escolhida; a barra do navegador so
+     atrapalharia a leitura. */
+  scrollbar-width: none;
+}
+
+#build-list::-webkit-scrollbar { display: none; }
+
+#build-list li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  white-space: nowrap;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(207, 238, 247, 0.5);
+  border: 1px solid transparent;
+  border-radius: 2px;
+}
+
+#build-list li i {
+  font-style: normal;
+  font-size: 9px;
+  opacity: 0.55;
+}
+
+#build-list li.sel {
+  color: #04121a;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+#build-list li.sel i { opacity: 0.7; }
+
+.build-info {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+}
+
+.build-info b {
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+#build-cost { color: var(--text); opacity: 0.75; }
+#build-cost.erro { color: #ff6b6b; opacity: 1; }
+
+.build-hint {
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0.1em;
+  opacity: 0.45;
+}
+
+.build-hint kbd {
+  font-family: inherit;
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+/* --------------------------- Barra de equipamento ------------------------ */
+
+#hotbar {
+  position: absolute;
+  bottom: 92px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+#hotbar.hidden { display: none; }
+
+#hotbar-list {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+#hotbar-list li {
+  --cor: #58e8ff;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(207, 238, 247, 0.45);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  backdrop-filter: blur(3px);
+  /* A transicao e o que faz a troca de equipamento parecer um gesto e nao um
+     corte seco; casa com a animacao de saque do modelo em primeira pessoa. */
+  transition: color 0.14s ease, border-color 0.14s ease, transform 0.14s ease;
+}
+
+#hotbar-list li i {
+  font-style: normal;
+  font-size: 9px;
+  opacity: 0.5;
+  min-width: 7px;
+}
+
+#hotbar-list li.sel {
+  color: var(--cor);
+  border-color: var(--cor);
+  transform: translateY(-3px);
+  box-shadow: 0 0 14px -4px var(--cor);
+}
+
+/* ------------------------------- Painel ---------------------------------- */
+
+#painel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 7, 12, 0.72);
+  backdrop-filter: blur(5px);
+  z-index: 40;
+}
+
+#painel.hidden { display: none; }
+
+.painel-caixa {
+  display: flex;
+  flex-direction: column;
+  width: min(940px, 92vw);
+  height: min(620px, 86vh);
+  border: 1px solid var(--border);
+  background: rgba(4, 12, 20, 0.92);
+  border-radius: 4px;
+}
+
+.painel-topo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.painel-abas {
+  display: flex;
+  gap: 2px;
+}
+
+.painel-abas button {
+  padding: 14px 20px;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: rgba(207, 238, 247, 0.45);
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.painel-abas button.sel {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.painel-unidades { font-size: 11px; letter-spacing: 0.12em; }
+.painel-unidades b { color: var(--gold); font-size: 15px; }
+.painel-unidades i { opacity: 0.5; margin-left: 5px; font-style: normal; }
+
+.painel-corpo {
+  flex: 1;
+  min-height: 0;
+  padding: 14px 16px;
+  overflow: hidden;
+}
+
+.painel-corpo.hidden { display: none; }
+
+.painel-sub {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.5;
+  margin-bottom: 10px;
+}
+
+/* --- Grade do inventario --- */
+
+.grade-slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  max-height: calc(100% - 30px);
+}
+
+.grade-slots .slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 12px 8px;
+  min-height: 132px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: rgba(88, 232, 255, 0.03);
+}
+
+/* O slot vazio e desenhado, nao omitido: quanto espaco ainda cabe e a
+   informacao mais util do inventario. */
+.grade-slots .slot.vazio {
+  border-style: dashed;
+  border-color: rgba(88, 232, 255, 0.12);
+  background: none;
+}
+
+.grade-slots img { image-rendering: auto; }
+.slot-nome { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.75; }
+.slot-qtd { font-size: 17px; color: var(--accent); }
+.slot-pilha { font-size: 9px; opacity: 0.4; }
+
+/* --- Catalogo de construcao --- */
+
+.catalogo {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: 14px;
+  height: 100%;
+}
+
+#catalogo-categorias {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  padding-right: 10px;
+}
+
+#catalogo-categorias li {
+  padding: 9px 10px;
+  border-radius: 3px;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+}
+
+#catalogo-categorias li b {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+#catalogo-categorias li i {
+  display: block;
+  margin-top: 2px;
+  font-size: 9px;
+  font-style: normal;
+  opacity: 0.4;
+}
+
+#catalogo-categorias li:hover { background: rgba(88, 232, 255, 0.05); }
+#catalogo-categorias li.sel { border-left-color: var(--accent); background: rgba(88, 232, 255, 0.08); }
+#catalogo-categorias li.sel b { color: var(--accent); }
+
+#catalogo-pecas {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  align-content: start;
+  gap: 8px;
+  margin: 0;
+  padding: 0 4px 4px 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+#catalogo-pecas li {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 10px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+#catalogo-pecas li:hover { background: rgba(88, 232, 255, 0.06); }
+#catalogo-pecas li.sel { border-color: var(--accent); background: rgba(88, 232, 255, 0.1); }
+
+/* Peca sem recurso continua VISIVEL, so apagada: esconde-la faria o catalogo
+   mudar de tamanho conforme o inventario, e o jogador nunca aprenderia que ela
+   existe nem o que precisa juntar para ter. */
+#catalogo-pecas li.indisponivel { opacity: 0.42; cursor: not-allowed; }
+
+.miniatura { width: 72px; height: 72px; object-fit: contain; }
+
+.peca-nome {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.peca-custo { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+
+.custo {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+}
+
+.custo img { vertical-align: middle; }
+.custo b { color: var(--text); font-weight: 500; }
+.custo i { font-style: normal; opacity: 0.45; }
+.custo.falta b { color: #ff6b6b; }
+
+.painel-rodape {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  opacity: 0.4;
+}
+
+.painel-rodape kbd { color: var(--accent); }
+
 /* ------------------------------- Banner --------------------------------- */
 
 #hud-banner {
@@ -354,6 +725,77 @@ body {
 .marker .label { display: block; font-weight: 600; }
 .marker .dist { display: block; opacity: 0.55; font-size: 9px; }
 
+/* ---------------------------------------------------------------------------
+   Sala de multijogador
+
+   Fica sob o painel de navegação, no mesmo canto: os dois respondem à pergunta
+   "onde eu estou e o que tem por perto". Separá-los em cantos opostos obrigaria
+   a varrer a tela para juntar as duas metades da mesma informação.
+--------------------------------------------------------------------------- */
+.panel--room {
+  top: 232px;
+  right: 20px;
+  text-align: right;
+  min-width: 180px;
+}
+
+.room-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.room-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  font-size: 11px;
+  line-height: 1.9;
+}
+
+.room-list .quem {
+  letter-spacing: 0.08em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 110px;
+}
+
+.room-list .onde {
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+/* O próprio jogador em destaque: é a âncora para ler o resto da lista. */
+.room-list .eu .quem {
+  color: var(--accent);
+}
+
+.room-list .eu .onde {
+  opacity: 0.4;
+}
+
+/* Quem está em outro corpo celeste não é alcançável a pé — a cor avisa antes
+   de a pessoa começar a andar naquela direção. */
+.room-list .longe .onde {
+  color: var(--warn);
+  opacity: 0.85;
+}
+
+/* Sem servidor: a linha vira a instrução de como ligar um. */
+.room-list .offline .quem {
+  opacity: 0.45;
+}
+
+.room-list .offline .onde {
+  color: var(--accent);
+  opacity: 0.55;
+  font-family: ui-monospace, Consolas, monospace;
+  letter-spacing: 0;
+}
+
+.marker--player { color: #7dffb0; }
+.marker--player .glyph { border-radius: 50%; transform: none; }
 .marker--ship { color: var(--warn); }
 .marker--ship .glyph { border-radius: 50%; transform: none; }
 .marker--moon { color: #b9c6d4; }
@@ -398,6 +840,88 @@ body {
   font-size: 12px;
   letter-spacing: 0.18em;
   margin: 0 0 26px;
+}
+
+/* ---------------------------------------------------------------------------
+   Nome do piloto
+
+   O campo tem a mesma linguagem do resto do HUD (caixa alta, espaçamento largo,
+   moldura fina) para não parecer um formulário web colado num jogo. A borda de
+   baixo é o único traço forte: ela guia o olho para onde digitar sem competir
+   com o botão de iniciar.
+--------------------------------------------------------------------------- */
+#pilot-form {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+
+#pilot-form label {
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  opacity: 0.55;
+}
+
+#pilot-name,
+#pilot-pass {
+  width: 260px;
+  background: rgba(8, 22, 30, 0.6);
+  border: 1px solid rgba(88, 232, 255, 0.22);
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 14px;
+  letter-spacing: 0.18em;
+  text-align: center;
+  padding: 10px 12px;
+  border-radius: 3px;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+#pilot-name::placeholder,
+#pilot-pass::placeholder {
+  color: rgba(140, 190, 205, 0.35);
+  letter-spacing: 0.1em;
+  text-transform: none;
+}
+
+#pilot-name:focus,
+#pilot-pass:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 18px rgba(88, 232, 255, 0.18);
+}
+
+/* Só fica vermelho depois de uma tentativa inválida — ver `main.js`. Marcar
+   erro enquanto a pessoa ainda está digitando o terceiro caractere é hostil. */
+#pilot-name.invalid {
+  border-color: #ff6b6b;
+  box-shadow: 0 0 18px rgba(255, 107, 107, 0.2);
+}
+
+/* A senha é opcional — nasce mais apagada para não parecer obrigatória. */
+#pilot-pass {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+#pilot-pass:focus {
+  opacity: 1;
+}
+
+#pilot-hint {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  opacity: 0.35;
+  height: 12px;
+}
+
+#pilot-hint.error {
+  color: #ff6b6b;
+  opacity: 0.9;
 }
 
 #boot-status {

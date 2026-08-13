@@ -24,6 +24,23 @@ export class Inventory {
     this.units = 0;
   }
 
+  /**
+   * Estado serializável, para o banco.
+   *
+   * Um `Map` não sobrevive a `JSON.stringify`: vira `{}` em silêncio, e o
+   * jogador voltaria com o inventário vazio sem nenhum erro no caminho.
+   */
+  toJSON() {
+    return { unidades: this.units, itens: [...this.items] };
+  }
+
+  /** Restaura o que veio do banco. Tolera formato ausente ou antigo. */
+  restaurar(dados) {
+    if (!dados) return;
+    this.units = Number(dados.unidades) || 0;
+    this.items = new Map(Array.isArray(dados.itens) ? dados.itens : []);
+  }
+
   /** Slots ocupados (um recurso pode ocupar mais de um). */
   get slotsUsed() {
     let used = 0;

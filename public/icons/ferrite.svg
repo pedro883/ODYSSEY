@@ -1,0 +1,18 @@
+<!--
+  Ferrite — o metal comum, o "tijolo" do jogo.
+
+  Lingote hexagonal visto em perspectiva. A leitura precisa funcionar a 20 px
+  no HUD, então nada de detalhe fino: três faces de brilho diferente já dizem
+  "bloco de metal" sem precisar de contorno.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="Ferrite">
+  <title>Ferrite</title>
+  <!-- topo -->
+  <path d="M24 7 L40 16 L24 25 L8 16 Z" fill="#c3ced9" />
+  <!-- face esquerda (sombra) -->
+  <path d="M8 16 L24 25 L24 41 L8 32 Z" fill="#67737f" />
+  <!-- face direita (meio-tom) -->
+  <path d="M40 16 L40 32 L24 41 L24 25 Z" fill="#8e9aa6" />
+  <!-- lasca de brilho no topo, para não ficar chapado -->
+  <path d="M24 10 L33 15 L24 20 L15 15 Z" fill="#e2eaf1" opacity="0.55" />
+</svg>

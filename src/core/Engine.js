@@ -17,6 +17,7 @@
  */
 
 import * as THREE from 'three';
+import { AerialPerspective } from '../shaders/AerialPerspective.js';
 
 export class Engine {
   /** @param {HTMLCanvasElement} canvas */
@@ -67,8 +68,52 @@ export class Engine {
     this._frameCount = 0;
     this._fpsAccumulator = 0;
 
+    // -----------------------------------------------------------------------
+    // Alvo de renderização para o pass de perspectiva aérea.
+    //
+    // TIPO MEIA-PRECISÃO FLUTUANTE, não byte: a cena agora é desenhada SEM
+    // tone mapping (ele passa a ser a última etapa, no pass), então o alvo
+    // guarda radiância crua, que passa de 1.0 com folga. Num alvo de 8 bits
+    // por canal tudo acima de 1 seria ceifado, e o poente — justamente a parte
+    // mais bonita — viraria um borrão branco chapado.
+    //
+    // `samples: 4` mantém o MSAA que o canvas tinha. Sem isso, trocar o canvas
+    // por um render target custaria as bordas serrilhadas de todo o terreno.
+    // -----------------------------------------------------------------------
+    this.aerial = new AerialPerspective();
+    // `?aerial=off` volta ao caminho antigo: cena direto no canvas, com o tone
+    // mapping dentro de cada material. Não é só depuração — mover o tone
+    // mapping para o fim MUDA a cor de toda a cena (ver README §3.6.3), e ter
+    // como comparar lado a lado é o que permite julgar a troca.
+    const desligado = new URLSearchParams(location.search).get('aerial') === 'off';
+    this.aerialEnabled = this.renderer.capabilities.isWebGL2 && !desligado;
+
+    if (this.aerialEnabled) {
+      const depthTexture = new THREE.DepthTexture();
+      depthTexture.type = THREE.UnsignedIntType;
+
+      this.renderTarget = new THREE.WebGLRenderTarget(1, 1, {
+        type: THREE.HalfFloatType,
+        depthTexture,
+        samples: 4,
+      });
+      // O tone mapping sai dos materiais e vira a última etapa do pass. Se
+      // ficasse ligado aqui, o espalhamento seria somado a cores JÁ
+      // comprimidas — o que, no limite, é somar luz a um branco saturado.
+      //
+      // EFEITO COLATERAL MEDIDO: a cena inteira fica mais escura, sobretudo no
+      // azul (em órbita, o canal azul cai de 26 para 15 na média da tela). O
+      // motivo é o termo de "offset" do Khronos Neutral, que subtrai o canal
+      // mínimo: antes ele era aplicado camada por camada, agora incide uma vez
+      // só sobre a SOMA — e numa cena escura como o espaço isso pesa. A
+      // calibração de `uSunIntensity` documentada no README foi feita no
+      // pipeline antigo e não vale mais ao pé da letra.
+      this.renderer.toneMapping = THREE.NoToneMapping;
+    }
+
     this._onResize = () => this.resize();
     window.addEventListener('resize', this._onResize);
+    this.resize();
 
     this._running = false;
     this._update = null;
@@ -84,6 +129,14 @@ export class Engine {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+
+    // O alvo vive em PIXELS DE DISPOSITIVO, não em pixels de CSS: ele
+    // substitui o framebuffer do canvas, e dimensioná-lo pelo tamanho da
+    // janela numa tela 2x renderizaria a cena em metade da resolução.
+    if (this.renderTarget) {
+      const ratio = this.renderer.getPixelRatio();
+      this.renderTarget.setSize(Math.round(width * ratio), Math.round(height * ratio));
+    }
   }
 
   /**
@@ -128,13 +181,67 @@ export class Engine {
     }
 
     this._update?.(dt, this.elapsed);
+    this.render();
+  }
+
+  /**
+   * Um pass quando não há perspectiva aérea, dois quando há.
+   *
+   * A ordem importa: a cena inteira (terreno, props, nuvens e a casca de
+   * atmosfera) vai para o alvo em radiância LINEAR; só depois o pass lê cor e
+   * profundidade, acrescenta o espalhamento sobre o terreno e fecha com
+   * exposição, tone mapping e conversão para sRGB.
+   */
+  render() {
+    if (!this.aerialEnabled) {
+      this.renderer.render(this.scene, this.camera);
+      this._renderOverlay();
+      return;
+    }
+
+    this.aerial.setCamera(this.camera);
+
+    this.renderer.setRenderTarget(this.renderTarget);
     this.renderer.render(this.scene, this.camera);
+    this.renderer.setRenderTarget(null);
+
+    this.aerial.render(
+      this.renderer,
+      this.renderTarget.texture,
+      this.renderTarget.depthTexture,
+      this.renderer.toneMappingExposure
+    );
+    this._renderOverlay();
+  }
+
+  /**
+   * Cena de sobreposição (mãos e ferramenta em primeira pessoa).
+   *
+   * Desenhada por ÚLTIMO e com o depth buffer limpo. As duas coisas são
+   * necessárias: por último porque no caminho da perspectiva aérea a imagem só
+   * chega ao canvas depois do pass de tela cheia — desenhar antes seria pintar
+   * num alvo que é descartado; e com o depth limpo porque a ferramenta está a
+   * 40 cm do olho, mais perto do que o plano próximo da câmera do jogo, e
+   * qualquer profundidade herdada a esconderia atrás do chão.
+   *
+   * `autoClear = false` no renderer inteiro seria mais simples e erraria feio:
+   * o frame seguinte acumularia sobre este.
+   */
+  _renderOverlay() {
+    if (!this.overlay?.visivel) return;
+    const autoClearAntes = this.renderer.autoClear;
+    this.renderer.autoClear = false;
+    this.renderer.clearDepth();
+    this.renderer.render(this.overlay.scene, this.overlay.camera);
+    this.renderer.autoClear = autoClearAntes;
   }
 
   dispose() {
     this.stop();
     this.timer.disconnect();
     window.removeEventListener('resize', this._onResize);
+    this.aerial.dispose();
+    this.renderTarget?.dispose();
     this.renderer.dispose();
   }
 }
