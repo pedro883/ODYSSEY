@@ -987,9 +987,43 @@ O sintoma era exato e confuso: a cratera existia para a colisão e para a altitu
 cair num buraco invisível. Uma segunda varredura depois que a fila esvazia
 resolve sem precisar de confirmação por chunk.
 
-Verificado: perfil atravessando uma cratera restaurada do banco, a cada 4
-unidades — `23,4 · 23,4 · 19,5 · 14,9 · 19,5 · 23,4 · 22,9`. Simétrico e suave,
-com o fundo 8,5 abaixo do terreno original.
+**Reconstruir agrupado, não por frame.** Segurando o botão, a mesma escavação é
+reaplicada a cada frame — 60 por segundo. Invalidar em cada uma descarta ~25
+chunks e os repede, e o pool processa ~12 por vez: a fila crescia mais rápido do
+que drenava e *nenhum* chunk chegava a ser entregue antes de ser descartado de
+novo. Na tela, o terreno piscava, aparecia em retalhos ou simplesmente não
+mudava enquanto se cavava — e como a colisão lê o amostrador da main thread, dava
+para afundar num chão que continuava desenhado. Agora há dois relógios: um curto
+(0,18 s) que reinicia a cada mudança e um teto (0,75 s) que dispara mesmo com a
+escavação em andamento. Uma cavada de dois segundos custa duas ou três
+reconstruções em vez de cento e vinte. Medido: fila de 274 pedidos antes,
+**0 durante a escavação**.
+
+**Terra remexida não é paredão de rocha.** O declive governa duas escolhas de cor
+— rocha exposta em encosta íngreme e ausência de neve em parede vertical — e as
+duas estão certas para relevo natural e erradas para uma vala. O declive de um
+buraco recém-cavado satura o medidor, e o interior saía pintado de leito
+rochoso: de `228,239,255` (areia quase branca) para `7,5,4` (quase preto) em dois
+metros, com borda dura. Era o "glitch de textura".
+
+A correção amolece o declive **só para efeito de cor**, na proporção de quanto
+aquele ponto foi mexido; geometria, colisão e bioma continuam com o declive real.
+A máscara usa a curva de platô e não o peso da própria edição — no domo do
+`SOMAR` o peso é mínimo na borda, que é justamente onde a parede fica mais
+íngreme, e a primeira tentativa acertou o fundo da cratera deixando um anel preto
+no meio dela. Com folga de 30% além do raio, some também o contorno escuro.
+
+Verificado — perfil atravessando uma cratera, a cada 2 unidades:
+
+| | −12 m | −8 m | −4 m | 0 | 4 m | 8 m | 12 m |
+|---|---|---|---|---|---|---|---|
+| elevação | 23,2 | 22,6 | 17,9 | **12,5** | 16,8 | 20,0 | 19,3 |
+| cor (R) | 228 | 220 | 222 | 231 | 228 | 227 | 232 |
+
+A elevação desenha a cratera; a cor atravessa sem salto. E uma cratera restaurada
+do banco num cliente novo mede
+`23,4 · 23,4 · 19,5 · 14,9 · 19,5 · 23,4 · 22,9` — simétrica, com o fundo 8,5
+abaixo do terreno original.
 
 ### 3.15 Equipamento e primeira pessoa
 

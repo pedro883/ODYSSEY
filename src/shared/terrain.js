@@ -232,6 +232,23 @@ export function createTerrainSampler(cfg, campoInicial = null) {
    */
   function colorAt(x, y, z, elevation, slope, out) {
     const e = elevation / cfg.maxElevation; // -1..1 aprox
+
+    // -----------------------------------------------------------------------
+    // TERRA REMEXIDA NÃO É PAREDÃO DE ROCHA.
+    //
+    // O declive governa duas escolhas de cor mais abaixo: rocha exposta em
+    // encosta íngreme e ausência de neve em parede vertical. As duas são certas
+    // para relevo natural e erradas para uma escavação — o declive de um buraco
+    // recém-cavado satura o medidor, e o interior inteiro saía pintado de leito
+    // rochoso, num salto de quase branco para quase preto em dois metros.
+    //
+    // Aqui o declive é AMOLECIDO na proporção do quanto aquele ponto foi
+    // mexido, e só para efeito de cor: a geometria, a colisão e o cálculo de
+    // bioma continuam usando o declive real. Uma vala passa a ter a cor do
+    // chão de onde saiu, que é o que a intuição espera de terra revolvida.
+    // -----------------------------------------------------------------------
+    const mexido = campo === null || campo.lista.length === 0 ? 0 : campo.intensidadeEm(x, y, z);
+    if (mexido > 0) slope = lerp(slope, Math.min(slope, 0.3), mexido);
     const temp = temperatureAt(x, y, z, elevation);
     const moist = moistureAt(x, y, z);
 

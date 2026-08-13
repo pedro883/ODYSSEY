@@ -24,6 +24,22 @@ const _tangentB = new THREE.Vector3();
 const _edicaoDir = new THREE.Vector3();
 const _edicaoPonto = new THREE.Vector3();
 
+/**
+ * Silêncio necessário antes de reconstruir o terreno escavado, em segundos.
+ *
+ * Curto: é o que separa "soltei o botão" de "o buraco apareceu". Ver
+ * `Planet._marcarSujo`.
+ */
+const ESPERA_APOS_ULTIMA = 0.18;
+
+/**
+ * Teto de espera, mesmo com a escavação em andamento.
+ *
+ * Sem ele, quem cava sem soltar o botão nunca veria o resultado — o relógio
+ * curto seria reiniciado a cada frame para sempre.
+ */
+const ESPERA_MAXIMA = 0.75;
+
 export class Planet {
   /**
    * @param {number} seed
@@ -46,6 +62,14 @@ export class Planet {
      * cratera e continua andando no ar sobre o chão que não existe mais.
      */
     this.edicoes = new CampoDeEdicoes(this.config.radius);
+
+    /** Regiões esperando reconstrução (ver `_marcarSujo`). @type {Map<string,object>} */
+    this._sujos = new Map();
+    this._esperaSujo = 0;
+    this._esperaMaxima = 0;
+    /** Segunda varredura após a fila drenar (ver `definirEdicoes`). */
+    this._revalidar = null;
+    this._ultimoElapsed = 0;
 
     // O MESMO amostrador que roda dentro dos workers. Aqui ele serve para
     // altitude da nave, colisão e posicionamento dos nós da quadtree — se as
@@ -144,6 +168,13 @@ export class Planet {
   update(cameraWorld, sunDirection, elapsed) {
     const cameraLocal = this._localPoint.copy(cameraWorld).sub(this.group.position);
 
+    // O `dt` é derivado do relógio do sistema estelar em vez de entrar por
+    // parâmetro: mudar a assinatura de `updatePlanets` obrigaria os quatro
+    // corpos a repassá-lo só porque um deles pode estar sendo escavado.
+    const dt = Math.min(0.1, Math.max(0, elapsed - this._ultimoElapsed));
+    this._ultimoElapsed = elapsed;
+
+    this._processarSujos(dt);
     this._passoRevalidacao();
     for (const root of this.roots) root.update(cameraLocal);
     this.chunks.update(cameraLocal);
@@ -165,6 +196,12 @@ export class Planet {
    */
   updateDistant(cameraWorld, sunDirection, elapsed) {
     const cameraLocal = this._localPoint.copy(cameraWorld).sub(this.group.position);
+    // Também aqui: alguém pode ter escavado neste corpo e voado para longe, e
+    // a reconstrução pendente não pode ficar presa esperando o jogador voltar.
+    const dt = Math.min(0.1, Math.max(0, elapsed - this._ultimoElapsed));
+    this._ultimoElapsed = elapsed;
+    this._processarSujos(dt);
+    this._passoRevalidacao();
     for (const root of this.roots) root.update(cameraLocal);
     this.chunks.update(cameraLocal);
     this.atmosphereUniforms.uPlanetCenter.value.copy(this.group.position);
@@ -239,8 +276,59 @@ export class Planet {
     if (!this.edicoes.aplicar(edicao)) return false;
 
     this.pool.enviarEdicao(this.planetId, edicao);
-    this._invalidarRegiao(edicao);
+    this._marcarSujo(edicao);
     return true;
+  }
+
+  /**
+   * Enfileira uma região para reconstrução, SEM reconstruir agora.
+   *
+   * -----------------------------------------------------------------------
+   * POR QUE NÃO INVALIDAR NA HORA
+   * -----------------------------------------------------------------------
+   * Enquanto o jogador segura o botão do terraformador, a mesma escavação é
+   * reaplicada a cada frame com a profundidade crescendo — 60 chamadas por
+   * segundo. Invalidar em cada uma descarta ~25 chunks e os repede; o pool
+   * processa no máximo ~12 por vez, então a fila cresce mais rápido do que
+   * drena e NENHUM chunk chega a ser entregue antes de ser descartado outra
+   * vez.
+   *
+   * O efeito na tela é exatamente o que se relata como "glitch": o terreno
+   * pisca, aparece em retalhos ou simplesmente não muda enquanto se cava — e
+   * só se acerta quando o jogador para. Pior: a colisão e a altitude (que leem
+   * o amostrador da main thread) já enxergam o buraco, então dá para afundar
+   * num chão que continua desenhado.
+   *
+   * Agrupando por tempo, uma escavação de dois segundos custa duas ou três
+   * reconstruções em vez de cento e vinte, e cada uma tem tempo de terminar.
+   */
+  _marcarSujo(edicao) {
+    // Guarda uma CÓPIA: a edição em curso continua mudando de profundidade a
+    // cada frame, e o que precisa ser reconstruído é a região, que não muda.
+    this._sujos.set(edicao.id, { x: edicao.x, y: edicao.y, z: edicao.z, r: edicao.r });
+    this._esperaSujo = ESPERA_APOS_ULTIMA;
+    if (this._esperaMaxima <= 0) this._esperaMaxima = ESPERA_MAXIMA;
+  }
+
+  /**
+   * Reconstrói o que foi marcado, quando for a hora.
+   *
+   * Dois relógios: um curto que reinicia a cada mudança (para reagir rápido
+   * quando o jogador solta o botão) e um teto que dispara mesmo com a
+   * escavação em andamento — sem ele, cavar sem parar nunca mostraria o
+   * resultado.
+   */
+  _processarSujos(dt) {
+    if (this._sujos.size === 0) return;
+
+    this._esperaSujo -= dt;
+    this._esperaMaxima -= dt;
+    if (this._esperaSujo > 0 && this._esperaMaxima > 0) return;
+
+    for (const regiao of this._sujos.values()) this._invalidarRegiao(regiao);
+    this._sujos.clear();
+    this._esperaSujo = 0;
+    this._esperaMaxima = 0;
   }
 
   /** Desfaz uma deformação (a base que a gerou foi demolida). */
