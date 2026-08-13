@@ -17,6 +17,20 @@ export default defineConfig({
 
   server: {
     port: 5173,
+    /**
+     * Escuta em TODAS as interfaces, não só em localhost.
+     *
+     * O padrão do Vite é `localhost`, e nesta máquina ele nem sequer abria em
+     * IPv4: a porta ficava presa em `::1`. Do próprio PC funciona e de qualquer
+     * outro a conexão é recusada sem explicação nenhuma — o navegador só diz
+     * que o site não respondeu. É o primeiro obstáculo de quem tenta jogar em
+     * rede local, e não há motivo para ele existir num projeto cujo sentido é
+     * duas pessoas no mesmo universo.
+     *
+     * `true` equivale a `0.0.0.0` + `::`, e faz o Vite imprimir a URL de rede
+     * no boot — que é justamente o endereço a passar para o outro computador.
+     */
+    host: true,
   },
 
   worker: {

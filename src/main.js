@@ -269,13 +269,49 @@ function enderecoDaSala() {
   const meta = document.querySelector('meta[name="nms-mp-server"]')?.content?.trim();
   if (meta) return meta;
 
-  // Em desenvolvimento, a sala é a que roda ao lado (`npm run mp`).
-  const local = ['localhost', '127.0.0.1', '::1', ''].includes(location.hostname);
-  if (local) return `ws://${location.hostname || 'localhost'}:5200`;
+  // Em desenvolvimento e em rede local, a sala roda ao lado (`npm run mp`).
+  if (enderecoDeRedeLocal(location.hostname)) {
+    return `ws://${location.hostname || 'localhost'}:5200`;
+  }
 
   // Publicado e sem servidor declarado: modo solo. Tentar um endereço
   // adivinhado só encheria o console de erro em cada visita.
   return null;
+}
+
+/**
+ * O jogo está sendo servido de uma máquina da própria rede?
+ *
+ * ---------------------------------------------------------------------------
+ * POR QUE NÃO BASTA TESTAR `localhost`
+ * ---------------------------------------------------------------------------
+ * A versão anterior só reconhecia `localhost` e `127.0.0.1`, e o efeito era
+ * silencioso e desconcertante: abrir o jogo do computador ao lado, pelo IP da
+ * rede, caía no ramo "publicado sem servidor declarado" e o multijogador se
+ * DESLIGAVA sozinho. O painel dizia OFFLINE, nenhum erro aparecia no console, e
+ * a sala rodando na outra ponta ficava esperando alguém que nunca ia chegar.
+ *
+ * Ou seja: o único cenário em que duas pessoas de fato jogam juntas era o único
+ * em que o jogo decidia jogar sozinho.
+ *
+ * O reconhecimento cobre as três faixas privadas da RFC 1918, os nomes `.local`
+ * (mDNS) e os nomes de máquina sem ponto, que é como um PC aparece numa rede
+ * doméstica Windows. Um domínio público continua caindo no modo solo, e é isso
+ * mesmo: lá o endereço precisa ser declarado na meta tag, porque quase sempre é
+ * `wss://` atrás de um proxy.
+ */
+function enderecoDeRedeLocal(hostname) {
+  if (!hostname) return true; // `file://` e afins
+  if (hostname === 'localhost' || hostname === '::1' || hostname.endsWith('.local')) return true;
+  if (/^127\./.test(hostname)) return true;
+
+  // Nome de máquina sem ponto: `PEDRO-PC`, `desktop`, resolvido pela rede local.
+  if (!hostname.includes('.') && !hostname.includes(':')) return true;
+
+  const ipv4 = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!ipv4) return false;
+  const [a, b] = [Number(ipv4[1]), Number(ipv4[2])];
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
 const enderecoSala = enderecoDaSala();
