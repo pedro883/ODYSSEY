@@ -351,6 +351,8 @@ function orientTowards(object, target) {
 
 let started = false;
 let spawnApplied = false;
+/** O jogador foi recolocado onde parou? Muda o aviso de entrada e trava o `?spawn`. */
+let voltouAoPonto = false;
 const CHUNKS_TO_BOOT = 30;
 
 /** Enter no campo do nome faz o mesmo que clicar em INICIAR VOO. */
@@ -392,6 +394,10 @@ async function iniciar() {
       inventory.restaurar(resposta.progresso.inventario);
       discovery.restaurar(resposta.progresso.descobertas);
       if (typeof resposta.progresso.unidades === 'number') inventory.units = resposta.progresso.unidades;
+
+      // O cenário de URL é ferramenta de teste e manda mais que o save: quem
+      // abre com `?spawn=orbita` quer ver a órbita, não voltar para onde parou.
+      if (!params.has('spawn')) voltouAoPonto = restaurarPosicao(resposta.progresso.posicao);
     }
     contaAtiva = true;
   }
@@ -400,6 +406,10 @@ async function iniciar() {
   multiplayer?.identificar(nome);
 
   started = true;
+  // Já restauramos a posição salva; deixar o cenário de URL rodar depois a
+  // sobrescreveria alguns frames adiante, e o jogador veria um salto.
+  if (voltouAoPonto) spawnApplied = true;
+
   overlay.classList.add('fade-out');
   hud.show();
   requestPointerLock();
@@ -408,7 +418,10 @@ async function iniciar() {
   // mudo sem nenhum erro. Ver o cabeçalho de `audio/AudioEngine.js`.
   audio.start();
   if (contaAtiva) hud.notify('PROGRESSO RESTAURADO', 2.6);
-  hud.notify(`SISTEMA ${homePlanet.name.toUpperCase()}`, 3.5);
+  hud.notify(
+    voltouAoPonto ? `DE VOLTA A ${activePlanet.name.toUpperCase()}` : `SISTEMA ${homePlanet.name.toUpperCase()}`,
+    3.5
+  );
 }
 
 // A cena de sobreposição tem câmera própria e não passa pelo resize do Engine.
@@ -957,11 +970,116 @@ let wasPulsing = false;
 /** Conta regressiva até a próxima gravação de progresso, em segundos. */
 let salvarTimer = 20;
 
+/* ========================================================================== */
+/* Onde o jogador parou                                                       */
+/* ========================================================================== */
+
+const _salvarLocal = new THREE.Vector3();
+
+/**
+ * Fotografia da posição, para voltar exatamente onde se saiu.
+ *
+ * ---------------------------------------------------------------------------
+ * COORDENADAS RELATIVAS AO PLANETA, NUNCA DE MUNDO
+ * ---------------------------------------------------------------------------
+ * Pelo mesmo motivo que a rede usa espaço local (ver `net/Multiplayer.js`): a
+ * origem flutuante desloca a cena inteira conforme o jogador anda, então a
+ * mesma coordenada de cena significa lugares diferentes em duas sessões. O
+ * centro do planeta é o único referencial que sobrevive a um recarregamento —
+ * e ele próprio deriva do seed, que é fixo.
+ *
+ * ---------------------------------------------------------------------------
+ * A NAVE VAI JUNTO, SEMPRE
+ * ---------------------------------------------------------------------------
+ * Guardar só o jogador funciona enquanto ele estiver pilotando. Quem sai do
+ * jogo a pé, a duzentos metros da nave, voltaria com ela de volta ao ponto
+ * inicial do sistema — ou seja, a pé e sem transporte, num planeta qualquer.
+ * A nave estacionada é parte de onde você parou.
+ */
+function estadoDePosicao() {
+  const planetaId = starSystem.planets.indexOf(activePlanet);
+  if (planetaId < 0) return null;
+
+  const centro = activePlanet.group.position;
+  const local = (v) => _salvarLocal.copy(v).sub(centro).toArray();
+
+  const estado = {
+    planeta: planetaId,
+    modo: mode,
+    nave: {
+      pos: local(ship.group.position),
+      quat: ship.group.quaternion.toArray(),
+    },
+  };
+
+  if (mode === 'FOOT') {
+    estado.jogador = local(playerController.position);
+    // O olhar entra para não devolver a pessoa girada para um lado aleatório —
+    // reencontrar a nave depois de carregar já é trabalho suficiente.
+    estado.olhar = playerController.forward.toArray();
+    estado.pitch = playerController.pitch;
+  }
+
+  return estado;
+}
+
+/**
+ * Recoloca o jogador onde parou.
+ *
+ * Chamado depois da autenticação, quando o terreno inicial já está pronto (o
+ * botão de iniciar só libera aí). Se o ponto salvo estiver em outro corpo, a
+ * malha de lá ainda não existe — e isso é seguro: colisão e altitude usam o
+ * amostrador analítico (`planet.sampleAt`), que responde certo mesmo onde
+ * nenhum chunk chegou. O terreno aparece em volta nos segundos seguintes.
+ *
+ * @returns {boolean} restaurou de fato
+ */
+function restaurarPosicao(estado) {
+  if (!estado || typeof estado.planeta !== 'number') return false;
+
+  const planeta = starSystem.planets[estado.planeta];
+  if (!planeta) return false;
+
+  const centro = planeta.group.position;
+  const mundo = (arr) => new THREE.Vector3().fromArray(arr).add(centro);
+
+  if (estado.nave?.pos) {
+    ship.group.position.copy(mundo(estado.nave.pos));
+    if (estado.nave.quat) ship.group.quaternion.fromArray(estado.nave.quat);
+  }
+
+  // Zera a física: velocidade guardada de outra sessão faria a nave sair
+  // deslizando sozinha no primeiro frame.
+  shipController.velocity.set(0, 0, 0);
+  shipController.throttle = 0;
+
+  activePlanet = planeta;
+
+  if (estado.modo === 'FOOT' && estado.jogador) {
+    const olhar = estado.olhar
+      ? new THREE.Vector3().fromArray(estado.olhar)
+      : new THREE.Vector3(0, 0, -1);
+    // `spawnAt` reprojeta o olhar no plano tangente e assenta o jogador na
+    // superfície — inclusive se o terreno mudou de altura desde que ele saiu,
+    // por escavação de outro jogador.
+    playerController.spawnAt(mundo(estado.jogador), planeta, olhar);
+    playerController.pitch = estado.pitch ?? 0;
+    playerController.enabled = true;
+    mode = 'FOOT';
+  } else {
+    playerController.enabled = false;
+    mode = 'SHIP';
+  }
+
+  return true;
+}
+
 function salvarProgresso() {
   multiplayer?.salvarProgresso({
     unidades: inventory.units,
     inventario: inventory.toJSON(),
     descobertas: discovery.toJSON(),
+    posicao: estadoDePosicao(),
   });
 }
 

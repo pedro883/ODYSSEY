@@ -124,7 +124,7 @@ export class Banco {
   async carregarProgresso(contaId, seed) {
     if (!this.disponivel) return null;
     const [linhas] = await this.pool.query(
-      'SELECT unidades, inventario, descobertas FROM progresso WHERE conta_id = ? AND seed = ?',
+      'SELECT unidades, inventario, descobertas, posicao FROM progresso WHERE conta_id = ? AND seed = ?',
       [contaId, seed]
     );
     if (linhas.length === 0) return null;
@@ -139,24 +139,30 @@ export class Banco {
       unidades: linha.unidades,
       inventario: comoObjeto(linha.inventario),
       descobertas: comoObjeto(linha.descobertas),
+      posicao: comoObjeto(linha.posicao),
     };
   }
 
   async salvarProgresso(contaId, seed, progresso) {
     if (!this.disponivel) return;
     await this.pool.query(
-      `INSERT INTO progresso (conta_id, seed, unidades, inventario, descobertas)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO progresso (conta_id, seed, unidades, inventario, descobertas, posicao)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          unidades = VALUES(unidades),
          inventario = VALUES(inventario),
-         descobertas = VALUES(descobertas)`,
+         descobertas = VALUES(descobertas),
+         -- COALESCE e não VALUES(): um cliente que salve sem posição (a foto
+         -- falha se o planeta ativo ainda não existe no boot) não pode apagar
+         -- o ponto onde a pessoa parou na sessão anterior.
+         posicao = COALESCE(VALUES(posicao), posicao)`,
       [
         contaId,
         seed,
         progresso.unidades ?? 0,
         JSON.stringify(progresso.inventario ?? []),
         JSON.stringify(progresso.descobertas ?? {}),
+        progresso.posicao ? JSON.stringify(progresso.posicao) : null,
       ]
     );
   }

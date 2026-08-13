@@ -64,6 +64,7 @@ simplesmente não aparece. Créditos em `public/models/CREDITS.md`.
 | **Terreno sob a base** | O relevo se aplaina sozinho embaixo do que se constrói, e o platô é recalculado por cada cliente a partir das peças — nada disso trafega |
 | **Equipamento** | Barra de três ferramentas (multiferramenta, construtor, terraformador) com mãos e arma em primeira pessoa, balanço de passo, coice ao usar e gesto de saque na troca |
 | **Painel (Tab)** | Inventário em grade com ícones próprios de cada recurso e catálogo de construção por categoria, com miniatura 3D gerada da própria peça e custo em "tenho/preciso" |
+| **Voltar onde parou** | A sessão seguinte começa no ponto exato em que a anterior terminou — corpo, posição, modo (nave ou a pé), olhar e a nave estacionada onde ficou |
 
 ### Números medidos
 
@@ -926,6 +927,41 @@ inteira e a desenhou na mesma posição de mundo. O jogador solto acima do piso
 pousa em `y = 0.300` — exatamente o topo da laje —, para a 0,15 da face interna
 da parede (o próprio raio do corpo) e atravessa a porta sem obstáculo. Demolir
 devolveu 15 de ferrite e apagou a linha do banco.
+
+### 3.13.1 Voltar onde parou
+
+O ponto em que a pessoa saiu entra no mesmo registro de progresso (§3.12) e é
+restaurado ao entrar com a conta.
+
+**Coordenadas relativas ao planeta, nunca de mundo** — pelo mesmo motivo que a
+rede usa espaço local (§3.11): a origem flutuante desloca a cena inteira conforme
+o jogador anda, então a mesma coordenada de cena significa lugares diferentes em
+duas sessões. O centro do planeta é o único referencial que sobrevive a um
+recarregamento, e ele próprio deriva do seed.
+
+**A nave vai junto, sempre.** Guardar só o jogador funciona enquanto ele estiver
+pilotando. Quem sai do jogo a pé, a duzentos metros da nave, voltaria com ela no
+ponto inicial do sistema — ou seja, a pé, sem transporte, num planeta qualquer.
+A nave estacionada é parte de onde você parou. O olhar também entra, para não
+devolver a pessoa girada para um lado aleatório.
+
+Duas sutilezas que o código registra:
+
+- `?spawn=` manda mais que o save. Quem abre com `?spawn=orbita` quer ver a
+  órbita, não voltar para onde parou — e sem essa precedência o cenário de teste
+  sobrescreveria a posição alguns frames depois, com um salto visível.
+- No banco, `posicao = COALESCE(VALUES(posicao), posicao)`. Um cliente que grave
+  sem posição não pode apagar o ponto da sessão anterior.
+
+Se o ponto salvo estiver em outro corpo, a malha de lá ainda não existe quando o
+jogo começa — e isso é seguro: colisão e altitude usam o amostrador analítico,
+que responde certo mesmo onde nenhum chunk chegou. O terreno aparece em volta nos
+segundos seguintes.
+
+Verificado de ponta a ponta: jogador a pé em **Fenivex VI** (corpo 2, não o
+inicial), **servidor reiniciado**, e ao entrar de novo o desvio foi de `0.00`
+tanto para o jogador quanto para a nave, com altitude 0 — de pé no chão, sem
+queda.
 
 ### 3.14 Terreno deformável
 

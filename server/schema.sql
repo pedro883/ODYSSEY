@@ -47,6 +47,11 @@ CREATE TABLE IF NOT EXISTS progresso (
   -- junções para reconstruir o mesmo objeto que o cliente já manda pronto.
   inventario  JSON         NULL,
   descobertas JSON         NULL,
+  -- Onde a pessoa parou: corpo, modo (nave/a pé), posição RELATIVA AO CENTRO
+  -- do planeta, orientação da nave e direção do olhar. Coordenada de mundo não
+  -- serviria: a origem flutuante desloca a cena inteira conforme se anda, então
+  -- o mesmo número significa lugares diferentes em duas sessões.
+  posicao     JSON         NULL,
   atualizado  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (conta_id, seed),
   CONSTRAINT fk_progresso_conta FOREIGN KEY (conta_id) REFERENCES conta (id) ON DELETE CASCADE
