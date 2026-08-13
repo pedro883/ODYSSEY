@@ -13,8 +13,30 @@ import { PROP_TYPE, PROP_YIELD, RESOURCES } from '../shared/props.js';
 const PULSE_DURATION = 1.7;
 const PULSE_RADIUS = 130;
 
-/** Alcance e velocidade do feixe. */
-const MINING_RANGE = 26;
+/**
+ * Alcance do feixe, em unidades de mundo.
+ *
+ * Catorze é deliberadamente curto: o jogador tem 1,8 de altura, então isto são
+ * uns sete corpos à frente — a distância de um objeto que dá para alcançar
+ * andando três passos. O valor anterior (26, mais a tolerância da mira) chegava
+ * a 32 unidades e produzia a queixa óbvia: dava para extrair praticamente
+ * qualquer coisa no campo de visão, inclusive arbustos do outro lado de uma
+ * ravina. Uma ferramenta de mão que alcança meio quarteirão tira o sentido de
+ * caminhar até o recurso.
+ */
+const MINING_RANGE = 14;
+
+/**
+ * Tolerância da mira: raio da busca ao redor do ponto amostrado.
+ *
+ * Cresce com a distância porque o que precisa ser constante é o ângulo, não o
+ * raio — a mesma folga de metros que é generosa a 12 unidades seria absurda a
+ * 3, e uma folga fixa pequena tornaria impossível acertar um arbusto distante.
+ * O termo constante cobre o tamanho físico dos props; o proporcional mantém a
+ * abertura em torno de 7°, perto da área do retículo na tela.
+ */
+const AIM_BASE = 0.6;
+const AIM_POR_UNIDADE = 0.12;
 /** Segundos para extrair um alvo (depósitos demoram mais). */
 const MINING_TIME = { [PROP_TYPE.BUSH]: 0.55, [PROP_TYPE.TREE]: 1.1, [PROP_TYPE.ROCK]: 1.3, [PROP_TYPE.DEPOSIT]: 2.2 };
 
@@ -82,7 +104,7 @@ export class Scanner {
    * @param {import('../world/Planet.js').Planet} planet
    * @param {import('./Discovery.js').Discovery} discovery
    * @param {import('./Inventory.js').Inventory} inventory
-   * @returns {{contagem:number[], novas:Array<object>, unidades:number}}
+   * @returns {{contagem:number[], flora:number, fauna:number, novas:Array<object>, unidades:number}}
    */
   scan(origin, planet, discovery, inventory) {
     this.pulse.position.copy(origin);
@@ -92,8 +114,10 @@ export class Scanner {
     const contagem = planet.props.census(origin, PULSE_RADIUS);
     const novas = [];
     let unidades = 0;
+    let flora = 0;
 
     for (let type = 0; type < contagem.length; type++) {
+      flora += contagem[type];
       if (contagem[type] === 0) continue;
       const resultado = discovery.registerSpecies(planet, type);
       if (resultado.novo) {
@@ -102,8 +126,25 @@ export class Scanner {
       }
     }
 
+    // --- Fauna --------------------------------------------------------------
+    // Contada à parte: só entra no censo o que estiver VIVO no raio agora.
+    // Isso é intencional — voltar ao mesmo planeta e não achar a criatura de
+    // novo é o que dá peso ao encontro, e o pool despawna quem ficou longe.
+    const porEspecie = planet.fauna?.censusBySpecies(origin, PULSE_RADIUS) ?? [];
+    let fauna = 0;
+
+    for (let i = 0; i < porEspecie.length; i++) {
+      if (porEspecie[i] === 0) continue;
+      fauna += porEspecie[i];
+      const resultado = discovery.registerFauna(planet, i, planet.fauna.species[i].nome);
+      if (resultado.novo) {
+        novas.push(resultado);
+        unidades += resultado.unidades;
+      }
+    }
+
     inventory.units += unidades;
-    return { contagem, novas, unidades };
+    return { contagem, flora, fauna, novas, unidades };
   }
 
   updatePulse(dt) {
@@ -143,19 +184,37 @@ export class Scanner {
   aim(origin, direction, planet) {
     let best = null;
 
-    // Amostra alguns pontos ao longo da mira; o primeiro que encontrar algo
-    // por perto vence (favorece o alvo mais próximo do jogador).
-    for (let step = 0.25; step <= 1.0; step += 0.25) {
-      _direction.copy(origin).addScaledVector(direction, MINING_RANGE * step);
-      const found = planet.props.findNearest(_direction, 3.2 + step * 3.0);
+    // Amostra ao longo da mira; o primeiro que encontrar algo por perto vence,
+    // o que naturalmente favorece o alvo mais próximo do jogador. Os passos são
+    // mais densos que antes porque a tolerância encolheu — com poucos pontos e
+    // raio pequeno, um alvo entre duas amostras não seria encontrado.
+    for (let d = 1.0; d <= MINING_RANGE; d += 1.5) {
+      _direction.copy(origin).addScaledVector(direction, d);
+      const found = planet.props.findNearest(_direction, AIM_BASE + d * AIM_POR_UNIDADE);
       if (found) { best = found; break; }
     }
+
+    // -----------------------------------------------------------------------
+    // Limite RÍGIDO de alcance.
+    //
+    // A busca acima é por proximidade ao RAIO, e um prop encontrado perto do
+    // último ponto amostrado pode estar lateralmente afastado o bastante para
+    // ficar além do alcance nominal. Sem esta checagem, a tolerância da mira
+    // vira alcance extra de graça — que foi como o feixe passou a alcançar 32
+    // unidades quando o número escrito no código dizia 26.
+    // -----------------------------------------------------------------------
+    if (best && best.position.distanceTo(origin) > MINING_RANGE) best = null;
 
     if (!best || !this.target || best.key !== this.target.key || best.index !== this.target.index) {
       this.progress = 0;
     }
     this.target = best;
     return best;
+  }
+
+  /** Alcance do feixe, para a interface poder explicá-lo. */
+  static get alcance() {
+    return MINING_RANGE;
   }
 
   /**

@@ -8,13 +8,22 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "assets": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/extract-assets.ps1",
     "deploy": "npm run build && npm run zip",
-    "zip": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/zip.ps1"
+    "zip": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/zip.ps1",
+    "mp": "node server/mp-server.js",
+    "start": "node server/mp-server.js"
   },
   "dependencies": {
-    "three": "^0.185.1"
+    "@dgreenheck/ez-tree": "^1.1.0",
+    "mysql2": "^3.23.3",
+    "three": "^0.185.1",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "vite": "^8.2.1"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

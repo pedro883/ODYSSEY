@@ -28,6 +28,9 @@ const _up = new THREE.Vector3();
 const _skyColor = new THREE.Color();
 const _groundColor = new THREE.Color();
 const _nightColor = new THREE.Color(0x02040a);
+/** Cor do sol rasante: o que sobra depois que a atmosfera come o azul. */
+const _sunsetColor = new THREE.Color(0xff8a3d);
+const _sunBase = new THREE.Color();
 
 export class GameState {
   /**
@@ -84,6 +87,7 @@ export class GameState {
 
     // Sol a pino = 1; sol abaixo do horizonte = 0. Governa dia/noite.
     const sunElevation = _up.dot(this.starSystem.sunDirection);
+    this.sunElevation = sunElevation;
     this.dayFactor = THREE.MathUtils.clamp(sunElevation * 1.6 + 0.22, 0, 1);
 
     this._updateAtmosphereVisuals(planet);
@@ -105,13 +109,45 @@ export class GameState {
 
     // Densidade: 0 no vácuo. O expoente cúbico mantém o espaço absolutamente
     // limpo e só "fecha" o horizonte nos últimos milhares de unidades.
-    this.fog.density = Math.pow(atmo, 3) * 0.00055 * planet.config.atmosphere.density;
+    //
+    // ---------------------------------------------------------------------
+    // COM O PASS DE PROFUNDIDADE LIGADO, ISTO VIRA QUASE ZERO.
+    //
+    // Esta névoa sempre foi a APROXIMAÇÃO da perspectiva aérea: uma cor média
+    // de céu aplicada por distância, sem saber que o ar rareia com a altitude
+    // nem que a luz avermelha ao rasante. O pass (`AerialPerspective.js`) faz
+    // a conta de verdade sobre os mesmos pixels, então manter a névoa cheia
+    // seria contar a atenuação duas vezes — e a segunda, errada.
+    //
+    // Sobra um resíduo de propósito: o pass integra só até o plano `far`
+    // efetivo do que foi desenhado, e um fiapo de névoa esconde a borda onde
+    // um chunk de LOD grosseiro termina.
+    // ---------------------------------------------------------------------
+    const fogScale = this.engine.aerialEnabled ? 0.12 : 1;
+    this.fog.density = Math.pow(atmo, 3) * 0.00055 * planet.config.atmosphere.density * fogScale;
 
     // --- Luz ambiente -------------------------------------------------------
     _groundColor.fromArray(planet.config.palette.dry);
     this.ambientLight.color.copy(_skyColor).multiplyScalar(0.6 + day * 0.4);
     this.ambientLight.groundColor.copy(_groundColor);
     this.ambientLight.intensity = 0.04 + atmo * day * 0.9;
+
+    // --- Luz do sol ---------------------------------------------------------
+    // A direcional é a MESMA para todo o sistema (é uma estrela só), mas a cor
+    // com que ela chega ao chão depende de quanto ar atravessou. Rasante ao
+    // horizonte o caminho é ~9x o vertical: o azul se esgota e sobra laranja.
+    //
+    // Este é o mesmo fenômeno que a atmosfera já calcula no shader — só que o
+    // shader pinta o CÉU, e nada disso chegava ao terreno, que continuava
+    // iluminado por uma luz branca de meio-dia enquanto o céu ardia em
+    // vermelho. É a maior causa isolada de "cena que não fecha".
+    const sun = this.starSystem.sunLight;
+    // 1 quando o sol está no horizonte, 0 quando está alto.
+    const grazing = 1 - THREE.MathUtils.clamp(this.sunElevation * 3.2, 0, 1);
+    _sunBase.fromArray(planet.config.sunColor);
+    sun.color.copy(_sunBase).lerp(_sunsetColor, grazing * atmo * 0.85);
+    // E a extinção: menos luz chega, além de chegar mais vermelha.
+    sun.intensity = 3.2 * (1 - grazing * atmo * 0.45);
 
     // --- Exposição ----------------------------------------------------------
     // O vácuo tem contraste altíssimo (fonte pontual, sem espalhamento); a

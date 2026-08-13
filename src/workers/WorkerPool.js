@@ -45,11 +45,35 @@ export class WorkerPool {
     }
   }
 
-  /** Ensina TODOS os workers a gerar terreno para este planeta. */
-  register(planetId, config) {
+  /**
+   * Ensina TODOS os workers a gerar terreno para este planeta.
+   * @param {object[]} [edicoes] escavações já existentes (restauradas do banco)
+   */
+  register(planetId, config, edicoes) {
     this.registered.set(planetId, 0);
     for (const worker of this.workers) {
-      worker.postMessage({ type: 'register', planetId, config });
+      worker.postMessage({ type: 'register', planetId, config, edicoes });
+    }
+  }
+
+  /**
+   * Propaga uma escavação para TODOS os workers.
+   *
+   * Todos, e não só o que vai gerar o chunk: o pool despacha pelo menos
+   * ocupado, então qualquer um pode receber o pedido de qualquer região. Um
+   * worker desatualizado devolveria um chunk com o buraco faltando, e o
+   * jogador veria um retalho do terreno antigo aparecer no meio da cratera.
+   */
+  enviarEdicao(planetId, edicao) {
+    for (const worker of this.workers) {
+      worker.postMessage({ type: 'edicao', planetId, edicao });
+    }
+  }
+
+  /** Substitui a lista inteira (restauração em bloco). */
+  enviarEdicoes(planetId, lista) {
+    for (const worker of this.workers) {
+      worker.postMessage({ type: 'edicoes', planetId, lista });
     }
   }
 

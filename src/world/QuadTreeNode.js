@@ -188,6 +188,45 @@ export class QuadTreeNode {
     return false;
   }
 
+  /**
+   * Joga fora a geometria desta subárvore onde a escavação chegou.
+   *
+   * Percorre de cima para baixo e poda cedo: um nó cuja calota nem encosta na
+   * edição não pode ter descendente que encoste, então a recursão inteira
+   * morre ali. Numa quadtree de 6 raízes isso reduz milhares de nós a algumas
+   * dezenas de testes.
+   *
+   * Não recria nada: o `update()` do próximo frame vê `mesh === null` e pede a
+   * malha de novo, agora com o campo de edições já atualizado nos workers.
+   *
+   * @param {THREE.Vector3} dirCentro direção unitária do centro da edição
+   * @param {number} raioAngular abertura da edição, em radianos
+   * @returns {number} quantos nós foram descartados
+   */
+  invalidar(dirCentro, raioAngular) {
+    // `size` 1 cobre uma face inteira (~90° = 1,57 rad), daí o fator ~1,6.
+    const alcance = raioAngular + this.size * 1.6;
+    if (this.centerDir.dot(dirCentro) < Math.cos(Math.min(Math.PI, alcance))) return 0;
+
+    let total = 0;
+    if (this.mesh || this.requestId !== 0) {
+      this.planet.chunks.descartar(this);
+      total++;
+    }
+
+    // O centro guardado veio da altura ANTIGA. Ele governa a decisão de
+    // subdividir, então deixá-lo defasado faria o LOD tratar o fundo de uma
+    // cratera nova como se ainda fosse o topo do morro que estava ali.
+    faceDirection(this.face, this.u + this.size * 0.5, this.v + this.size * 0.5, _dir);
+    const r = this.planet.config.radius + this.planet.sampler.heightAt(_dir[0], _dir[1], _dir[2]);
+    this.center.set(_dir[0] * r, _dir[1] * r, _dir[2] * r);
+
+    if (this.children) {
+      for (const child of this.children) total += child.invalidar(dirCentro, raioAngular);
+    }
+    return total;
+  }
+
   /** Chamado pelo ChunkManager quando o worker entrega a geometria. */
   attachMesh(mesh) {
     this.mesh = mesh;

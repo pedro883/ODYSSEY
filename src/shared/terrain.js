@@ -85,8 +85,18 @@ const BIOME_NAMES = {
  * @param {object} cfg saída de `createPlanetConfig()` — precisa ser um objeto
  *   serializável (structured-clone) porque atravessa a fronteira do worker.
  */
-export function createTerrainSampler(cfg) {
+export function createTerrainSampler(cfg, campoInicial = null) {
   const seed = cfg.seed;
+
+  /**
+   * Camada de escavações por cima do ruído (`shared/edits.js`).
+   *
+   * Fica numa variável mutável, e não num parâmetro fixo, porque o worker troca
+   * o campo por um RECORTE da região antes de gerar cada chunk — ver
+   * `CampoDeEdicoes.paraRegiao`. O amostrador não precisa saber disso; só sabe
+   * que existe um campo e que ele pode mudar entre chamadas.
+   */
+  let campo = campoInicial;
 
   // Campos de ruído independentes. Offsets primos evitam correlação visível
   // entre eles (dois campos correlacionados fazem montanha sempre nascer
@@ -169,7 +179,15 @@ export function createTerrainSampler(cfg) {
     const roughness = fbm(nDetail, x, y, z, 3, P.roughnessFreq, 0.5, 2.4) * P.roughnessAmp;
 
     const h = continent * 0.5 + mountains * 0.8 + craters * 0.12 + detail + roughness;
-    return h * cfg.maxElevation;
+    const elevacao = h * cfg.maxElevation;
+
+    // As escavações entram DEPOIS da multiplicação por `maxElevation` porque
+    // elas são medidas em unidades de mundo — um buraco de 4 unidades é 4
+    // unidades numa lua e num gigante gasoso. Somá-las antes faria a mesma pá
+    // de terra cavar fundos diferentes em cada planeta.
+    return campo === null || campo.lista.length === 0
+      ? elevacao
+      : campo.alturaEm(x, y, z, elevacao);
   }
 
   /** Umidade normalizada em [0,1] — separa deserto de floresta. */
@@ -270,5 +288,10 @@ export function createTerrainSampler(cfg) {
     return out;
   }
 
-  return { heightAt, colorAt, biomeAt, moistureAt, temperatureAt };
+  /** Troca a camada de escavações (o worker usa por chunk; ver acima). */
+  function usarCampo(novo) {
+    campo = novo;
+  }
+
+  return { heightAt, colorAt, biomeAt, moistureAt, temperatureAt, usarCampo };
 }

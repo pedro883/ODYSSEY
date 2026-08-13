@@ -17,26 +17,41 @@
 import { createTerrainSampler, faceDirection } from '../shared/terrain.js';
 import { mulberry32 } from '../shared/noise.js';
 import { PROP_TYPE, biomeScatter } from '../shared/props.js';
+import { CampoDeEdicoes } from '../shared/edits.js';
 
-/** @type {Map<number, {cfg: object, sampler: object}>} */
+/** @type {Map<number, {cfg: object, sampler: object, campo: CampoDeEdicoes}>} */
 const planets = new Map();
 
 self.onmessage = (event) => {
   const msg = event.data;
 
   if (msg.type === 'register') {
+    const campo = new CampoDeEdicoes(msg.config.radius);
+    if (msg.edicoes?.length) campo.definir(msg.edicoes);
     planets.set(msg.planetId, {
       cfg: msg.config,
-      sampler: createTerrainSampler(msg.config),
+      campo,
+      sampler: createTerrainSampler(msg.config, campo),
     });
     self.postMessage({ type: 'registered', planetId: msg.planetId });
+    return;
+  }
+
+  // Escavações. Chegam avulsas (o jogador cavou) ou em bloco (restauração do
+  // banco ao entrar na sala). Não respondem nada: quem pediu a mudança já
+  // invalidou os chunks da região e vai repedi-los.
+  if (msg.type === 'edicao' || msg.type === 'edicoes') {
+    const planet = planets.get(msg.planetId);
+    if (!planet) return;
+    if (msg.type === 'edicoes') planet.campo.definir(msg.lista);
+    else planet.campo.aplicar(msg.edicao);
     return;
   }
 
   if (msg.type === 'build') {
     const planet = planets.get(msg.planetId);
     if (!planet) return;
-    const result = buildChunk(msg, planet.cfg, planet.sampler);
+    const result = buildChunk(msg, planet.cfg, planet.sampler, planet.campo);
     self.postMessage(result, [
       result.positions.buffer,
       result.normals.buffer,
@@ -76,8 +91,26 @@ function chunkSeed(planetId, face, u0, v0) {
   return h >>> 0;
 }
 
-function buildChunk(req, cfg, sampler) {
+function buildChunk(req, cfg, sampler, campo) {
   const { id, face, u0, v0, size, withProps } = req;
+
+  // -----------------------------------------------------------------------
+  // Recorte das escavações que alcançam ESTE chunk.
+  //
+  // Feito uma vez aqui, antes do laço de milhares de vértices. Sem isso, cada
+  // vértice pagaria um produto escalar por edição existente no planeta — o
+  // custo de gerar terreno cresceria com o quanto o mundo já foi cavado, mesmo
+  // do outro lado do globo.
+  //
+  // O raio angular é o do chunk (`size` cobre 1/4 de face ≈ 90°) com folga:
+  // uma edição que só encosta na borda ainda precisa entrar, senão aparece um
+  // degrau exatamente na costura entre dois chunks.
+  // -----------------------------------------------------------------------
+  const dirCentro = [0, 0, 0];
+  faceDirection(face, u0 + size * 0.5, v0 + size * 0.5, dirCentro);
+  sampler.usarCampo(
+    campo.lista.length === 0 ? campo : campo.paraRegiao(dirCentro, size * 1.6)
+  );
 
   const res = cfg.lod.chunkRes;
   const N = res + 1;        // vértices por lado do chunk

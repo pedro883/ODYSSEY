@@ -26,8 +26,9 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
-# Editores
+# Editores e ferramentas de assistente
 .vscode/*
 !.vscode/extensions.json
 .idea/
 *.swp
+.claude/

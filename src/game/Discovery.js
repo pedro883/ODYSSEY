@@ -30,6 +30,14 @@ const REWARD = {
   [PROP_TYPE.TREE]: 480,
   [PROP_TYPE.ROCK]: 260,
   [PROP_TYPE.DEPOSIT]: 900,
+  /**
+   * Fauna paga mais que qualquer flora e perde só para o planeta.
+   * A flora está espalhada por todo lado e é catalogada no primeiro pulso;
+   * uma criatura precisa estar viva por perto no momento da varredura, o que
+   * significa ter descido, andado e chegado perto o bastante. O prêmio
+   * acompanha o esforço.
+   */
+  fauna: 1400,
 };
 
 function speciesName(seed) {
@@ -44,6 +52,16 @@ export class Discovery {
     this.known = new Set();
     /** @type {Array<{titulo:string, subtitulo:string, unidades:number}>} */
     this.log = [];
+  }
+
+  /** Estado serializável (um `Set` também não sobrevive ao JSON). */
+  toJSON() {
+    return { conhecidas: [...this.known] };
+  }
+
+  restaurar(dados) {
+    if (!dados) return;
+    this.known = new Set(Array.isArray(dados.conhecidas) ? dados.conhecidas : []);
   }
 
   get count() {
@@ -79,6 +97,31 @@ export class Discovery {
 
     this.known.add(key);
     const unidades = REWARD[propType] ?? 200;
+    this.log.push({ titulo: nome, subtitulo: `${categoria} · ${planet.name}`, unidades });
+    return { novo: true, nome, categoria, unidades };
+  }
+
+  /**
+   * Registra uma espécie de fauna daquele planeta.
+   *
+   * A chave usa o ÍNDICE da espécie dentro do planeta, e não o modelo: o mesmo
+   * `animal-fox.glb` aparece em mundos diferentes com matiz, porte e nome
+   * próprios, e catalogar um não pode catalogar os outros.
+   *
+   * @param {object} planet
+   * @param {number} index posição em `planet.fauna.species`
+   * @param {string} tipo rótulo da espécie ('predador', 'alado'…)
+   * @returns {{novo:boolean, nome:string, categoria:string, unidades:number}}
+   */
+  registerFauna(planet, index, tipo) {
+    const key = `fauna:${planet.config.seed}:${index}`;
+    const nome = speciesName((planet.config.seed * 131 + index * 4409 + 0x9e37) >>> 0);
+    const categoria = tipo ? `Fauna · ${tipo}` : 'Fauna';
+
+    if (this.known.has(key)) return { novo: false, nome, categoria, unidades: 0 };
+
+    this.known.add(key);
+    const unidades = REWARD.fauna;
     this.log.push({ titulo: nome, subtitulo: `${categoria} · ${planet.name}`, unidades });
     return { novo: true, nome, categoria, unidades };
   }

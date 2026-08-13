@@ -226,7 +226,10 @@ export class ChunkManager {
    * @param {THREE.Vector3} cameraLocal posição da câmera no espaço do planeta
    */
   update(cameraLocal) {
-    if (this.props) this.props.update();
+    // A câmera entra aqui porque o repack precisa saber o que está PERTO:
+    // quando a vegetação estoura o teto de instâncias, quem sobra tem de ser
+    // o que está debaixo do nariz do jogador. Ver `PropScatter.update()`.
+    if (this.props) this.props.update(cameraLocal);
     if (!this.isReady || this.pending.size === 0) return;
 
     let slots = this.maxInFlight - this.pool.inFlight;
@@ -321,6 +324,49 @@ export class ChunkManager {
       this.cache.delete(oldestKey);
       this._disposeMesh(evicted.mesh);
     }
+  }
+
+  /**
+   * Destrói a malha de um nó SEM guardá-la no cache.
+   *
+   * É o contrário de `releaseMesh`, e a diferença é o ponto todo: um chunk
+   * invalidado por escavação está ERRADO. Mandá-lo para o cache faria o buraco
+   * desaparecer assim que o jogador se afastasse e voltasse — o cache serviria
+   * o terreno antigo de volta, e o bug pareceria intermitente.
+   */
+  descartar(node) {
+    if (node.requestId !== 0) this.cancel(node);
+    if (!node.mesh) return;
+    this.group.remove(node.mesh);
+    this.activeChunks--;
+    if (this.props) this.props.removeChunk(node.key);
+    this._disposeMesh(node.mesh);
+    node.mesh = null;
+    node.propsData = null;
+  }
+
+  /**
+   * Esvazia do cache tudo que a escavação tornou obsoleto.
+   *
+   * @param {THREE.Vector3} pontoLocal centro da edição, no espaço do planeta
+   * @param {number} raio alcance em unidades de mundo
+   */
+  purgarCache(pontoLocal, raio) {
+    // O raio do chunk entra na conta: um chunk grande cujo CENTRO está longe
+    // ainda pode ter a borda dentro da cratera.
+    const limite = raio + this.config.radius * 0.05;
+    const limiteSq = limite * limite;
+    let removidos = 0;
+
+    for (const [chave, entrada] of this.cache) {
+      const [x, y, z] = entrada.center;
+      const dx = x - pontoLocal.x, dy = y - pontoLocal.y, dz = z - pontoLocal.z;
+      if (dx * dx + dy * dy + dz * dz > limiteSq) continue;
+      this.cache.delete(chave);
+      this._disposeMesh(entrada.mesh);
+      removidos++;
+    }
+    return removidos;
   }
 
   _disposeMesh(mesh) {

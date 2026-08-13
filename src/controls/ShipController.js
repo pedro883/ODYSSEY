@@ -377,6 +377,32 @@ export class ShipController {
     _gravity.copy(_up).multiplyScalar(-SETTINGS.gravity * gravityFactor);
     this.velocity.addScaledVector(_gravity, dt);
 
+    // -----------------------------------------------------------------------
+    // TRAVA DE APROXIMAÇÃO — o passo do frame nunca passa de metade da altitude.
+    //
+    // A trava do pulse (acima) limita a velocidade ALVO. Não basta: a
+    // velocidade REAL converge para o alvo com constante de tempo ~0,3 s, e a
+    // 20 000 u/s isso são ~5 800 unidades de frenagem — mais que o raio de um
+    // planeta inteiro. A nave chegava do outro lado antes de o motor obedecer.
+    //
+    // Pior: `dt` é limitado a 0,1 s (um engasgo de GC, um stall de driver), e
+    // um único frame desses a 26 000 u/s são 2 600 unidades num salto só. Como
+    // a colisão testa um PONTO, e não o trajeto, o planeta simplesmente não
+    // estava lá em nenhum dos dois frames.
+    //
+    // Metade da altitude por frame é uma série geométrica: a nave sempre chega
+    // perto, nunca atravessa, e o piso de `groundClearance * 2` garante que ela
+    // ainda consegue de fato tocar o solo para pousar.
+    // -----------------------------------------------------------------------
+    const step = this.velocity.length() * dt;
+    const safeStep = Math.max(sample.altitude * 0.5, SETTINGS.groundClearance * 2);
+    if (step > safeStep) {
+      // Freia a VELOCIDADE, não só o deslocamento: limitar o passo mantendo a
+      // velocidade faria a nave pairar contra uma parede invisível, acelerada,
+      // sem nunca encostar no chão nem desacelerar.
+      this.velocity.multiplyScalar(safeStep / step);
+    }
+
     this.object.position.addScaledVector(this.velocity, dt);
 
     this._resolveGroundCollision(planet, dt);
