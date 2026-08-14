@@ -38,6 +38,15 @@ const VOLUMETRICO =
  */
 const ALCANCE_SONDA = 260;
 
+/**
+ * Altura acima da superfície em que a sonda ainda é consultada.
+ *
+ * É o que permite CAIR numa boca de caverna: sobre ela o campo de altura mente,
+ * e sem esta faixa o jogador andaria por cima do buraco. Estreita de propósito —
+ * cada consulta custa uma marcha.
+ */
+const ALTURA_SONDAVEL = 6;
+
 /** Direção reaproveitada nas consultas à sonda (ver `sampleAt`). */
 const _dirSonda = [0, 0, 0];
 
@@ -332,8 +341,28 @@ export class Planet {
     // Estar dentro de uma caverna é estar abaixo do TERRENO (rocha), que é
     // `radius + elevation` — sem o `max(…, 0)` do nível do mar.
     // -----------------------------------------------------------------------
-    const abaixoDoTerreno = distance < this.config.radius + elevation;
-    if (this.sonda && abaixoDoTerreno) {
+    // -----------------------------------------------------------------------
+    // A SONDA VALE TAMBÉM UM POUCO ACIMA DA SUPERFÍCIE.
+    //
+    // Com a regra anterior (só abaixo do terreno) era IMPOSSÍVEL entrar numa
+    // caverna. Sobre a boca, `heightAt` continua reportando o relevo — ele não
+    // sabe do buraco —, então o jogador pisava em chão que não existe. E no
+    // instante em que afundava meio metro, a sonda finalmente respondia "o piso
+    // está 43 unidades abaixo", com a colisão já tendo-o assentado na
+    // superfície: ele era empurrado de volta para cima. Era exatamente o
+    // relatado, "fica voltando para a superfície".
+    //
+    // Consultando numa faixa em torno da superfície, sobre a boca a resposta
+    // passa a ser o piso da caverna desde o começo, e o jogador cai nela.
+    //
+    // Continua barato: a faixa é estreita, e quem está voando ou em órbita
+    // (a esmagadora maioria das consultas) nem chega perto dela.
+    //
+    // A ressalva do oceano permanece: em água, `surfaceRadius` é o NÍVEL DO MAR
+    // por convenção, e trocá-lo pelo fundo quebra pouso e flutuação.
+    // -----------------------------------------------------------------------
+    const emTerra = !this.config.hasWater || elevation > 0;
+    if (this.sonda && emTerra && sample.altitude < ALTURA_SONDAVEL) {
       // A sonda trabalha com um array simples, e não com `Vector3`: ela é
       // compartilhada com os workers, onde importar a engine inteira seria
       // desperdício. Passar o `Vector3` direto daria `dir[0] === undefined` e

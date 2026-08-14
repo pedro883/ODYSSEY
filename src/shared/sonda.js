@@ -68,13 +68,13 @@ export function criarSonda(campo) {
       const rB = rDe + d * i;
       const vB = amostra(dir, rB, altura);
 
-      if ((vA <= 0) !== (vB <= 0)) {
+      if ((vA < 0) !== (vB < 0)) {
         // Bisseção no intervalo que trocou de sinal.
         let lo = rA, hi = rB, vLo = vA;
         for (let k = 0; k < bisseccoes; k++) {
           const meio = (lo + hi) * 0.5;
           const vMeio = amostra(dir, meio, altura);
-          if ((vLo <= 0) !== (vMeio <= 0)) hi = meio;
+          if ((vLo < 0) !== (vMeio < 0)) hi = meio;
           else { lo = meio; vLo = vMeio; }
         }
         return (lo + hi) * 0.5;
@@ -89,9 +89,21 @@ export function criarSonda(campo) {
     return campo.densidadeComAltura(dir[0] * raio, dir[1] * raio, dir[2] * raio, altura, raio);
   }
 
-  /** O ponto está dentro da rocha? */
+  /**
+   * O ponto está dentro da rocha?
+   *
+   * ESTRITAMENTE menor que zero, igual ao mesher (`marchingCubes.js` liga o bit
+   * do caso com `< 0`). A sonda usava `<= 0` e as duas convenções divergiam
+   * exatamente no ponto da superfície, onde a densidade vale zero por
+   * construção.
+   *
+   * O efeito era uma TAMPA de espessura nula sobre cada boca de caverna: o
+   * perfil media +0,50 acima, 0,000 na superfície e +1,70 logo abaixo — ou
+   * seja, ar dos dois lados de um único ponto tratado como rocha. A marcha da
+   * colisão parava nele e o jogador andava por cima do buraco.
+   */
   function solidoEm(dir, raio) {
-    return amostra(dir, raio, campo.superficieEm(dir[0], dir[1], dir[2])) <= 0;
+    return amostra(dir, raio, campo.superficieEm(dir[0], dir[1], dir[2])) < 0;
   }
 
   /**
@@ -124,7 +136,7 @@ export function criarSonda(campo) {
     // para CIMA, para a superfície, e não atraído para um vão lá embaixo.
     // -----------------------------------------------------------------------
     const altura = campo.superficieEm(dir[0], dir[1], dir[2]);
-    if (amostra(dir, raio, altura) <= 0) return null;
+    if (amostra(dir, raio, altura) < 0) return null;
 
     return cruzamentoRadial(dir, raio, raio - alcance, 2.0);
   }

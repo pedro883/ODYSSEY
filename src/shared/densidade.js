@@ -201,8 +201,19 @@ export function criarCampoDeDensidade(cfg, heightAt) {
     const boca = C.bocas ? intensidadeDaBoca(x, y, z) : 0;
     const margemTeto = C.margemTeto * (1 - boca);
 
+    // A boca entra como PISO da abertura, não só encolhendo a margem.
+    //
+    // Encolher a margem deixava a abertura valer zero exatamente na superfície
+    // — `smoothstep(0, x, 0)` é sempre 0 — e sobrava uma TAMPA de espessura
+    // nula sobre cada boca. Bastava para o campo dizer "rocha" no ponto exato
+    // do relevo, e a marcha da colisão parava ali: o jogador andava sobre o
+    // buraco como se houvesse chão.
+    //
+    // Com o piso, onde a boca é forte a abertura já vale 1 na superfície e o
+    // buraco é buraco desde o primeiro centímetro.
+    const rampaTeto = Math.max(boca, smoothstep(0, Math.max(0.5, margemTeto), profundidade));
     const abertura =
-      smoothstep(0, Math.max(0.5, margemTeto), profundidade) *
+      rampaTeto *
       (1 - smoothstep(C.profundidadeMaxima - C.margemPiso, C.profundidadeMaxima, profundidade));
     if (abertura <= 0) return d;
 
