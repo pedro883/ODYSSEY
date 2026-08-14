@@ -45,10 +45,22 @@ toda divergência é defeito do mesher, não mudança de conteúdo.
       ser de fato ligada — eu tinha montado a tabela de alturas e continuava
       chamando `densidadeEm`, que a recalculava).
 
-- [ ] **2b. Ligar no worker, atrás de `?volumetrico=1`**
-      Nova mensagem ao lado de `buildChunk`, entregando o mesmo formato de
-      payload para o `ChunkManager` não precisar saber a diferença ainda. Falta
-      a cor por vértice (o payload atual traz `colors`).
+- [x] **2b. Ligado no worker, atrás de `?volumetrico=1`**
+      `construirChunkVolumetrico` convive com `buildChunk`; quem decide é a
+      REQUISIÇÃO, não o worker — o que permite, mais adiante, só os níveis finos
+      serem volumétricos. O payload ganhou `indices` (a topologia de altura é
+      compartilhada entre chunks, a volumétrica é própria de cada um).
+
+      A cor sai de `colorAt` como antes, mas o declive vem da NORMAL e não de
+      amostras vizinhas do relevo: em parede de caverna não existe "relevo
+      vizinho" que faça sentido.
+
+      Verificado no jogo: 252 chunks, 301 malhas, 658 mil triângulos, mundo
+      pronto e navegável.
+
+      **Pendências conhecidas deste passo:** props não são gerados no caminho
+      volumétrico (devolve array vazio), e as cavernas existem mas ainda não há
+      como descer até elas.
 
 - [ ] **3. Octree no lugar da quadtree**
       A quadtree é 2D, uma por face do cubo. Volume exige subdivisão em três

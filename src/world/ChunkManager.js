@@ -99,6 +99,17 @@ function buildSharedIndex(res) {
   return new THREE.BufferAttribute(idx, 1);
 }
 
+/**
+ * Terreno volumétrico (`?volumetrico=1`).
+ *
+ * Desligado por padrão enquanto a migração não termina — ver `VOLUMETRICO.md`.
+ * A regra é que o jogo continue jogável em todo commit, e é este interruptor
+ * que a sustenta.
+ */
+const VOLUMETRICO =
+  typeof location !== 'undefined' &&
+  new URLSearchParams(location.search).get('volumetrico') === '1';
+
 /** Quantos chunks descarregados guardamos prontos para voltar. */
 const CACHE_CAPACITY = 220;
 
@@ -267,6 +278,11 @@ export class ChunkManager {
         v0: node.v,
         size: node.size,
         withProps: this.wantsProps(node.level),
+        // Interruptor da migração volumétrica. Vai na REQUISIÇÃO e não num
+        // estado do worker para que os dois caminhos possam conviver no mesmo
+        // pool — inclusive num futuro em que só os níveis mais finos sejam
+        // volumétricos e os grosseiros continuem em campo de altura.
+        volumetrico: VOLUMETRICO,
       });
     }
   }
@@ -294,7 +310,13 @@ export class ChunkManager {
     geometry.setAttribute('position', new THREE.BufferAttribute(payload.positions, 3));
     geometry.setAttribute('normal', new THREE.BufferAttribute(payload.normals, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(payload.colors, 3));
-    geometry.setIndex(this.sharedIndex);
+    // O caminho de altura usa um índice COMPARTILHADO entre todos os chunks (a
+    // topologia de uma grade regular é sempre a mesma). O volumétrico produz
+    // topologia própria, porque o número de triângulos depende de como a
+    // superfície corta as células.
+    geometry.setIndex(
+      payload.indices ? new THREE.BufferAttribute(payload.indices, 1) : this.sharedIndex
+    );
 
     // Calculada no worker: evita um passe O(n) na main thread por chunk.
     geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), payload.boundingRadius);

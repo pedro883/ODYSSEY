@@ -18,6 +18,17 @@ import { createTerrainSampler, faceDirection } from '../shared/terrain.js';
 import { mulberry32 } from '../shared/noise.js';
 import { PROP_TYPE, biomeScatter } from '../shared/props.js';
 import { CampoDeEdicoes } from '../shared/edits.js';
+import { criarCampoDeDensidade } from '../shared/densidade.js';
+import { malharChunkVolumetrico } from '../shared/chunkVolumetrico.js';
+
+/**
+ * Camadas radiais de um chunk volumétrico.
+ *
+ * Governa a espessura da casca que o marching cubes percorre. Mais camadas dão
+ * cavernas mais profundas alcançáveis num chunk só, e o custo cresce linear:
+ * cada camada é uma varredura angular inteira de amostras.
+ */
+const RES_RADIAL = 24;
 
 /** @type {Map<number, {cfg: object, sampler: object, campo: CampoDeEdicoes}>} */
 const planets = new Map();
@@ -51,13 +62,25 @@ self.onmessage = (event) => {
   if (msg.type === 'build') {
     const planet = planets.get(msg.planetId);
     if (!planet) return;
-    const result = buildChunk(msg, planet.cfg, planet.sampler, planet.campo);
-    self.postMessage(result, [
+    // Os dois caminhos convivem de propósito: o volumétrico ainda está em
+    // migração e o jogo tem de continuar jogável em todo commit. Quem decide é
+    // a requisição, não o worker.
+    const result = msg.volumetrico
+      ? construirChunkVolumetrico(msg, planet.cfg, planet.sampler, planet.campo)
+      : buildChunk(msg, planet.cfg, planet.sampler, planet.campo);
+
+    const transferiveis = [
       result.positions.buffer,
       result.normals.buffer,
       result.colors.buffer,
       result.props.buffer,
-    ]);
+    ];
+    // O caminho de altura usa um índice COMPARTILHADO, montado uma vez na main
+    // thread; o volumétrico produz topologia própria por chunk e precisa
+    // mandá-la junto.
+    if (result.indices) transferiveis.push(result.indices.buffer);
+
+    self.postMessage(result, transferiveis);
   }
 };
 
@@ -77,6 +100,96 @@ function accumulateFaceNormal(pos, nrm, a, b, c) {
   nrm[a] += nx; nrm[a + 1] += ny; nrm[a + 2] += nz;
   nrm[b] += nx; nrm[b + 1] += ny; nrm[b + 2] += nz;
   nrm[c] += nx; nrm[c + 1] += ny; nrm[c + 2] += nz;
+}
+
+/**
+ * Chunk volumétrico (marching cubes sobre grade esférica).
+ *
+ * Entrega o MESMO formato de payload do caminho de altura, mais `indices`. É
+ * isso que permite ao `ChunkManager` ainda não saber a diferença entre os dois
+ * — e é o que mantém a migração reversível enquanto ela não termina.
+ *
+ * O campo de densidade é criado por chunk e não cacheado por planeta porque as
+ * escavações mudam `heightAt`, e um campo preso a um `sampler` antigo devolveria
+ * terreno anterior à última pá de terra.
+ */
+function construirChunkVolumetrico(req, cfg, sampler, campo) {
+  const { id, face, u0, v0, size } = req;
+
+  const dirCentro = [0, 0, 0];
+  faceDirection(face, u0 + size * 0.5, v0 + size * 0.5, dirCentro);
+  sampler.usarCampo(
+    campo.lista.length === 0 ? campo : campo.paraRegiao(dirCentro, size * 1.6)
+  );
+
+  const densidade = criarCampoDeDensidade(cfg, sampler.heightAt);
+  const malha = malharChunkVolumetrico({
+    cfg,
+    campo: densidade,
+    face,
+    u0,
+    v0,
+    size,
+    resAngular: cfg.lod.chunkRes,
+    resRadial: RES_RADIAL,
+  });
+
+  // As posições saem em espaço LOCAL do planeta; o resto do jogo espera que
+  // venham relativas ao CENTRO do chunk (é assim que o mesh é posicionado).
+  const centro = [
+    dirCentro[0] * ((malha.rMin + malha.rMax) * 0.5),
+    dirCentro[1] * ((malha.rMin + malha.rMax) * 0.5),
+    dirCentro[2] * ((malha.rMin + malha.rMax) * 0.5),
+  ];
+
+  const n = malha.positions.length / 3;
+  const cores = new Float32Array(n * 3);
+  const rgb = [0, 0, 0];
+  let raioEnv = 0;
+
+  for (let i = 0; i < n; i++) {
+    const i3 = i * 3;
+    const x = malha.positions[i3];
+    const y = malha.positions[i3 + 1];
+    const z = malha.positions[i3 + 2];
+
+    // --- Cor -------------------------------------------------------------
+    // O declive vem da NORMAL, e não de duas amostras vizinhas do relevo como
+    // no caminho de altura: aqui a normal já é o gradiente do campo, e em
+    // parede de caverna não existe "relevo vizinho" que faça sentido.
+    const r = Math.hypot(x, y, z) || 1;
+    const nx = x / r, ny = y / r, nz = z / r;
+    const alinhamento =
+      malha.normals[i3] * nx + malha.normals[i3 + 1] * ny + malha.normals[i3 + 2] * nz;
+    const declive = Math.min(1, Math.max(0, 1 - alinhamento));
+    sampler.colorAt(nx, ny, nz, r - cfg.radius, declive, rgb);
+    cores[i3] = rgb[0]; cores[i3 + 1] = rgb[1]; cores[i3 + 2] = rgb[2];
+
+    // --- Recentra no centro do chunk --------------------------------------
+    const lx = x - centro[0];
+    const ly = y - centro[1];
+    const lz = z - centro[2];
+    malha.positions[i3] = lx;
+    malha.positions[i3 + 1] = ly;
+    malha.positions[i3 + 2] = lz;
+    const d2 = lx * lx + ly * ly + lz * lz;
+    if (d2 > raioEnv) raioEnv = d2;
+  }
+
+  return {
+    type: 'chunk',
+    id,
+    planetId: req.planetId,
+    positions: malha.positions,
+    normals: malha.normals,
+    colors: cores,
+    indices: malha.indices,
+    props: new Float32Array(0),
+    center: centro,
+    boundingRadius: Math.sqrt(raioEnv),
+    minElev: malha.hMin - cfg.radius,
+    maxElev: malha.hMax - cfg.radius,
+  };
 }
 
 function buildChunk(req, cfg, sampler, campo) {
