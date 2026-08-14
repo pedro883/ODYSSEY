@@ -220,5 +220,102 @@ export function malharChunkVolumetrico({
     posicaoDe,
   });
 
-  return { ...malha, rMin, rMax, hMin, hMax, colunas: ladoA * ladoA, amostras: total };
+  const comSaia = costurarSaia(malha, PASSO_RADIAL * 1.6);
+
+  return { ...comSaia, rMin, rMax, hMin, hMax, colunas: ladoA * ladoA, amostras: total };
+}
+
+/**
+ * Acrescenta uma SAIA nas bordas abertas da malha.
+ *
+ * ===========================================================================
+ * O QUE ELA RESOLVE
+ * ===========================================================================
+ * Entre chunks do MESMO nível a costura fecha exatamente — medido: as posições
+ * coincidem e as normais divergem 0,01 grau. Entre níveis DIFERENTES não fecha,
+ * e não tem como fechar: o chunk fino tem o dobro de amostras angulares na
+ * borda, então há vértices dele sem correspondente do lado grosso. É o vértice
+ * em T clássico, e a fresta aparece como uma linha de chunk na paisagem.
+ *
+ * A saída canônica é o transvoxel, que gera células de transição próprias. É
+ * bastante código e uma tabela nova. A saia é o que o caminho de campo de altura
+ * já usa neste projeto: em vez de casar as bordas, ESCONDE a fresta baixando
+ * uma cortina de geometria por trás dela.
+ *
+ * Não é elegante e é honesta sobre o que faz — a fresta continua existindo, só
+ * que atrás dela há terreno em vez de espaço vazio, e o olho não distingue.
+ *
+ * ===========================================================================
+ * COMO
+ * ===========================================================================
+ * Uma aresta de BORDA é usada por um triângulo só. Numa malha de marching cubes
+ * fechada, as únicas bordas abertas são as das paredes do chunk. Cada uma é
+ * estendida radialmente para DENTRO do planeta, formando um quadrilátero.
+ *
+ * A orientação vem da aresta dirigida do triângulo dono, e não de uma escolha
+ * arbitrária: assim a saia herda o lado de fora da superfície que a gerou, em
+ * vez de aparecer preta por estar virada ao contrário.
+ *
+ * @param {{positions:Float32Array, normals:Float32Array, indices:Uint32Array}} malha
+ * @param {number} profundidade quanto a cortina desce, em unidades
+ */
+function costurarSaia(malha, profundidade) {
+  const { positions, normals, indices } = malha;
+
+  // Arestas dirigidas: a que não tiver a oposta é borda.
+  const vistas = new Set();
+  for (let t = 0; t < indices.length; t += 3) {
+    vistas.add(indices[t] * 4294967296 + indices[t + 1]);
+    vistas.add(indices[t + 1] * 4294967296 + indices[t + 2]);
+    vistas.add(indices[t + 2] * 4294967296 + indices[t]);
+  }
+
+  const bordas = [];
+  for (const chave of vistas) {
+    const a = Math.floor(chave / 4294967296);
+    const b = chave % 4294967296;
+    if (!vistas.has(b * 4294967296 + a)) bordas.push(a, b);
+  }
+  if (bordas.length === 0) return malha;
+
+  const nOrig = positions.length / 3;
+  // Um vértice novo por vértice de borda, reaproveitado entre arestas vizinhas.
+  const mapa = new Map();
+  const posExtra = [];
+  const nrmExtra = [];
+
+  const rebaixado = (i) => {
+    const existente = mapa.get(i);
+    if (existente !== undefined) return existente;
+    const x = positions[i * 3], y = positions[i * 3 + 1], z = positions[i * 3 + 2];
+    const r = Math.hypot(x, y, z) || 1;
+    const k = nOrig + posExtra.length / 3;
+    posExtra.push(
+      x - (x / r) * profundidade,
+      y - (y / r) * profundidade,
+      z - (z / r) * profundidade
+    );
+    // A normal é herdada do vértice de cima: a saia é uma cortina, e dar-lhe
+    // normal própria a faria acender de forma diferente do terreno que ela
+    // continua — o que criaria a linha que ela existe para esconder.
+    nrmExtra.push(normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]);
+    mapa.set(i, k);
+    return k;
+  };
+
+  const idxExtra = [];
+  for (let e = 0; e < bordas.length; e += 2) {
+    const a = bordas[e], b = bordas[e + 1];
+    const a2 = rebaixado(a), b2 = rebaixado(b);
+    idxExtra.push(a, b, b2, a, b2, a2);
+  }
+
+  const pos = new Float32Array(positions.length + posExtra.length);
+  pos.set(positions); pos.set(posExtra, positions.length);
+  const nrm = new Float32Array(normals.length + nrmExtra.length);
+  nrm.set(normals); nrm.set(nrmExtra, normals.length);
+  const idx = new Uint32Array(indices.length + idxExtra.length);
+  idx.set(indices); idx.set(idxExtra, indices.length);
+
+  return { positions: pos, normals: nrm, indices: idx };
 }

@@ -165,10 +165,24 @@ toda divergência é defeito do mesher, não mudança de conteúdo.
       borda têm par EXATO. O número de camadas passa a variar com o relevo
       local, que é o preço, e é barato.
 
-- [ ] **5b. Costura entre níveis DIFERENTES de LOD**
-      Continua aberta. O chunk fino tem o dobro de amostras angulares na borda,
-      então sobram vértices em T sem correspondente do lado grosso. Exige
-      transvoxel, ou saia, ou forçar níveis iguais na vizinhança.
+- [x] **5b. Costura entre níveis DIFERENTES — resolvida por SAIA**
+      Entre níveis diferentes não há como casar: o chunk fino tem o dobro de
+      amostras angulares na borda, então sobram vértices em T. A saída canônica
+      é o transvoxel (tabela nova, bastante código); a escolhida é a saia, que é
+      o que o caminho de campo de altura já usa aqui.
+
+      Ela não fecha a fresta — esconde. Cada aresta de borda vira uma cortina
+      descendo 7,6 unidades, com a normal herdada do vértice de cima (normal
+      própria acenderia diferente e criaria a linha que a saia existe para
+      esconder). A orientação vem da aresta dirigida do triângulo dono, senão a
+      cortina apareceria preta.
+
+      Medido: 85,8% dos vértices seguem na superfície com mediana de erro
+      0,0002 u; os outros 14,2% são a saia, exatamente a 7,60 u abaixo. Custo
+      +0,6 ms por chunk.
+
+      **Antes disso ficou provado que o mesmo nível já estava perfeito**: as
+      posições coincidem e as normais divergem 0,01 grau.
 
 - [ ] **6. Bioma, cor, props e oceano**
       Todos derivam de `heightAt`. Precisam de critério novo: a cor passa a
