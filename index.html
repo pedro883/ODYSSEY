@@ -153,6 +153,41 @@
     </div>
 
     <!--
+      ================= Mapa galáctico (N) =================
+
+      Só interface: as estrelas são desenhadas no canvas WebGL, numa cena
+      própria. O que vive aqui é o texto — que em DOM é nítido, selecionável e
+      de graça, e dentro do WebGL exigiria atlas de fontes.
+    -->
+    <div id="mapa" class="hidden">
+      <header class="mapa-topo">
+        <div><em>GALÁXIA</em><b id="mapa-galaxia">—</b></div>
+        <div><em>SISTEMAS VISITADOS</em><b id="mapa-visitados">0</b></div>
+        <div><em>ALCANCE</em><b id="mapa-alcance">0</b><i>al</i></div>
+        <div><em>ESTRELAS À VISTA</em><b id="mapa-estrelas">0</b></div>
+      </header>
+
+      <aside class="mapa-ficha hidden" id="mapa-ficha">
+        <div class="ficha-tag" id="ficha-tag">SISTEMA</div>
+        <h2 id="ficha-nome">—</h2>
+        <div class="ficha-endereco" id="ficha-endereco">—</div>
+        <dl>
+          <div><dt>Classe</dt><dd id="ficha-classe">—</dd></div>
+          <div><dt>Planetas</dt><dd id="ficha-planetas">—</dd></div>
+          <div><dt>Distância</dt><dd id="ficha-distancia">—</dd></div>
+        </dl>
+        <div class="ficha-acao" id="ficha-acao">—</div>
+      </aside>
+
+      <footer class="mapa-rodape">
+        <kbd>Arrastar</kbd> girar <kbd>Roda</kbd> aproximar <kbd>Clique</kbd> escolher
+        <kbd>Duplo clique</kbd>/<kbd>Enter</kbd> saltar
+        <kbd>C</kbd> centrar em você <kbd>F</kbd> no destino
+        <kbd>[</kbd><kbd>]</kbd> galáxia <kbd>N</kbd> fechar
+      </footer>
+    </div>
+
+    <!--
       ================= Painel (Tab) =================
 
       Inventário e catálogo de construção na MESMA janela, em abas. Separá-los

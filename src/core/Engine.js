@@ -193,6 +193,23 @@ export class Engine {
    * exposição, tone mapping e conversão para sRGB.
    */
   render() {
+    // -----------------------------------------------------------------------
+    // MAPA GALÁCTICO: SUBSTITUI O MUNDO, NÃO SE SOMA A ELE.
+    //
+    // O mapa é uma cena inteira em outra escala (voxels de anos-luz contra
+    // unidades de metro). Desenhar os dois no mesmo frame não traria nada — o
+    // jogador está olhando o mapa — e obrigaria a conciliar dois planos de
+    // profundidade separados por dez ordens de grandeza.
+    //
+    // A sobreposição continua sendo desenhada por cima: é onde vive o túnel do
+    // salto, que precisa cobrir tanto o mapa quanto o mundo.
+    // -----------------------------------------------------------------------
+    if (this.mapa?.aberto) {
+      this.renderer.render(this.mapa.scene, this.mapa.camera);
+      this._renderOverlay();
+      return;
+    }
+
     if (!this.aerialEnabled) {
       this.renderer.render(this.scene, this.camera);
       this._renderOverlay();

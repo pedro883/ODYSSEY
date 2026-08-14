@@ -406,6 +406,125 @@ body {
   box-shadow: 0 0 14px -4px var(--cor);
 }
 
+/* --------------------------- Mapa galactico ------------------------------ */
+
+/* O HUD de voo some sob o mapa: velocidade e bioma nao dizem nada enquanto se
+   olha uma galaxia, e as caixas tapariam os cantos que a ficha precisa. */
+#hud.oculto-por-mapa > .panel,
+#hud.oculto-por-mapa > #reticle,
+#hud.oculto-por-mapa > #hotbar,
+#hud.oculto-por-mapa > #buildbar,
+#hud.oculto-por-mapa > #prompt { display: none; }
+
+#mapa {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 30;
+}
+
+#mapa.hidden { display: none; }
+
+.mapa-topo {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 34px;
+  padding: 16px 22px;
+  background: linear-gradient(rgba(2, 7, 12, 0.8), transparent);
+}
+
+.mapa-topo div { display: flex; flex-direction: column; gap: 3px; }
+.mapa-topo em {
+  font-style: normal;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  opacity: 0.45;
+}
+.mapa-topo b { font-size: 17px; font-weight: 500; color: var(--accent); }
+.mapa-topo i { font-style: normal; font-size: 10px; opacity: 0.5; margin-left: 3px; }
+
+.mapa-ficha {
+  position: absolute;
+  top: 50%;
+  right: 26px;
+  transform: translateY(-50%);
+  width: 268px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  background: rgba(4, 12, 20, 0.86);
+  border-radius: 4px;
+  backdrop-filter: blur(4px);
+}
+
+.mapa-ficha.hidden { display: none; }
+
+.ficha-tag {
+  display: inline-block;
+  padding: 3px 8px;
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  border: 1px solid rgba(207, 238, 247, 0.25);
+  border-radius: 2px;
+  opacity: 0.6;
+}
+.ficha-tag.atual { color: var(--gold); border-color: var(--gold); opacity: 1; }
+.ficha-tag.visitado { color: var(--shield); border-color: var(--shield); opacity: 1; }
+
+.mapa-ficha h2 {
+  margin: 12px 0 2px;
+  font-size: 23px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+
+.ficha-endereco {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  opacity: 0.45;
+  margin-bottom: 14px;
+}
+
+.mapa-ficha dl { margin: 0; }
+.mapa-ficha dl div {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 0;
+  border-top: 1px solid rgba(88, 232, 255, 0.1);
+  font-size: 11px;
+}
+.mapa-ficha dt { opacity: 0.5; }
+.mapa-ficha dd { margin: 0; }
+
+.ficha-acao {
+  margin-top: 15px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.ficha-acao.bloqueado { color: #ff6b6b; }
+
+.mapa-rodape {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 14px 22px;
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  opacity: 0.5;
+  background: linear-gradient(transparent, rgba(2, 7, 12, 0.8));
+}
+.mapa-rodape kbd { color: var(--accent); margin: 0 2px 0 10px; }
+
 /* ------------------------------- Painel ---------------------------------- */
 
 #painel {

@@ -109,6 +109,23 @@ export class HUD {
       assinatura: '',
     };
 
+    this.mapa = {
+      root: el('mapa'),
+      galaxia: el('mapa-galaxia'),
+      visitados: el('mapa-visitados'),
+      alcance: el('mapa-alcance'),
+      estrelas: el('mapa-estrelas'),
+      ficha: el('mapa-ficha'),
+      tag: el('ficha-tag'),
+      nome: el('ficha-nome'),
+      endereco: el('ficha-endereco'),
+      classe: el('ficha-classe'),
+      planetas: el('ficha-planetas'),
+      distancia: el('ficha-distancia'),
+      acao: el('ficha-acao'),
+      assinatura: '',
+    };
+
     this._accumulator = 0;
     this._bannerTimer = 0;
     this._discoveryTimer = 0;
@@ -331,6 +348,61 @@ export class HUD {
       this.hotbar.chips[estado.atual]?.classList.add('sel');
       this.hotbar.atual = estado.atual;
     }
+  }
+
+  /* ===================================================================== */
+  /* Mapa galáctico                                                        */
+  /* ===================================================================== */
+
+  /**
+   * Abre o mapa e esconde o HUD de voo.
+   *
+   * Os dois juntos seriam ruído puro: velocidade, altitude e bioma não querem
+   * dizer nada enquanto se olha para uma galáxia, e as caixas do HUD tapariam
+   * justamente os cantos onde a ficha do sistema precisa caber.
+   */
+  mostrarMapa(aberto) {
+    this.mapa.root.classList.toggle('hidden', !aberto);
+    this.root.classList.toggle('oculto-por-mapa', aberto);
+  }
+
+  atualizarMapa(estado) {
+    const m = this.mapa;
+    m.galaxia.textContent = estado.galaxia;
+    m.visitados.textContent = String(estado.visitados);
+    m.alcance.textContent = String(estado.alcance);
+    m.estrelas.textContent = estado.estrelas.toLocaleString('pt-BR');
+
+    const f = estado.ficha;
+    if (!f) {
+      m.ficha.classList.add('hidden');
+      return;
+    }
+    m.ficha.classList.remove('hidden');
+
+    // Assinatura: o mapa roda a 60 Hz e a ficha só muda quando o cursor troca
+    // de estrela. Sem ela seriam nove escritas de DOM por frame para reescrever
+    // exatamente o mesmo texto.
+    const assinatura = `${f.endereco}|${f.alcancavel}|${f.atual}|${f.visitado}`;
+    if (assinatura === m.assinatura) return;
+    m.assinatura = assinatura;
+
+    m.nome.textContent = f.nome;
+    m.endereco.textContent = f.endereco;
+    m.classe.textContent = `${f.classe} · ${nomeDaClasse(f.classe)}`;
+    m.planetas.textContent = String(f.planetas);
+    m.distancia.textContent = f.atual ? '—' : `${f.distancia.toFixed(2)} al`;
+
+    m.tag.textContent = f.atual ? 'VOCÊ ESTÁ AQUI' : f.visitado ? 'JÁ VISITADO' : 'NÃO EXPLORADO';
+    m.tag.className = `ficha-tag${f.atual ? ' atual' : f.visitado ? ' visitado' : ''}`;
+
+    const acao = f.atual
+      ? 'sistema atual'
+      : f.alcancavel
+        ? 'ENTER ou duplo clique para saltar'
+        : 'fora do alcance do hiperimpulsor';
+    m.acao.textContent = acao;
+    m.acao.classList.toggle('bloqueado', !f.atual && !f.alcancavel);
   }
 
   /* ===================================================================== */
@@ -583,6 +655,14 @@ function escapar(texto) {
   return String(texto).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   })[c]);
+}
+
+/** Como o jogador lê a classe espectral — a letra sozinha não diz nada. */
+function nomeDaClasse(letra) {
+  return {
+    O: 'azul, hipergigante', B: 'azul-branca', A: 'branca', F: 'branco-amarela',
+    G: 'amarela', K: 'laranja', M: 'anã vermelha',
+  }[letra] ?? 'desconhecida';
 }
 
 function formatCount(value) {

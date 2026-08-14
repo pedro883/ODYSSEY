@@ -29,6 +29,9 @@ import { BuildSystem } from './game/BuildSystem.js';
 import { Terraform } from './game/Terraform.js';
 import { FERRAMENTAS, caminhosDeFerramentas } from './game/Tools.js';
 import { ViewModel } from './entities/ViewModel.js';
+import { GalaxyMap } from './galaxy/GalaxyMap.js';
+import { WarpJump } from './galaxy/WarpJump.js';
+import { GALAXIAS, nomeDoSistema } from './shared/galaxy.js';
 import { PECAS, descreverCusto } from './assets/buildings.js';
 import { RESOURCES } from './shared/props.js';
 import { HUD, toLatLon } from './ui/HUD.js';
@@ -216,6 +219,41 @@ viewModel.equipar(ferramentaAtual().modelo);
 hud.ligarPainel({ aoEscolherPeca: (indice) => escolherPecaDoCatalogo(indice) });
 
 /* ========================================================================== */
+/* Mapa galáctico e salto                                                     */
+/* ========================================================================== */
+
+/**
+ * Alcance do hiperimpulsor, em voxels do mapa (≈ anos-luz).
+ *
+ * Curto de propósito. Um alcance que cobrisse a galáxia inteira transformaria
+ * o mapa num menu de teletransporte e apagaria a única decisão que ele oferece:
+ * qual salto dar em seguida. Com cinco, chegar ao outro lado é uma sequência de
+ * escolhas, e um sistema fora de alcance é um destino, não um erro.
+ */
+const ALCANCE_SALTO = 5;
+
+let galaxiaAtual = 0;
+
+const galaxyMap = new GalaxyMap({
+  podeSaltar: (sistema) => {
+    if (!galaxyMap.atual) return false;
+    if (sistema.galaxia !== galaxyMap.atual.galaxia) return false;
+    const d = Math.hypot(
+      sistema.x - galaxyMap.atual.x,
+      sistema.y - galaxyMap.atual.y,
+      sistema.z - galaxyMap.atual.z
+    );
+    return d > 0 && d <= ALCANCE_SALTO;
+  },
+});
+galaxyMap.alcance = ALCANCE_SALTO;
+galaxyMap.situar(galaxiaAtual, starSystem.seed);
+engine.mapa = galaxyMap;
+
+const warp = new WarpJump();
+warp.acoplar(viewModel.camera);
+
+/* ========================================================================== */
 /* Origem flutuante                                                           */
 /* ========================================================================== */
 
@@ -230,10 +268,24 @@ hud.ligarPainel({ aoEscolherPeca: (indice) => escolherPecaDoCatalogo(indice) });
 //   - props, fauna e chunks: vivem no espaço LOCAL do planeta e andam junto
 //     com o grupo dele de graça.
 const floatingOrigin = new FloatingOrigin(4096);
-floatingOrigin
-  .add(...starSystem.planets.map((planet) => planet.group))
-  .add(ship.group, scanner.pulse, scanner.beam)
-  .addVector(playerController.position);
+
+/**
+ * (Re)inscreve tudo que guarda posição de mundo.
+ *
+ * É uma função e não um bloco solto porque o salto interestelar troca os
+ * planetas: os `group` inscritos aqui deixariam de existir, e o rebase seguinte
+ * empurraria objetos órfãos enquanto os novos ficariam parados — o mundo
+ * inteiro deslizando por baixo da nave.
+ */
+function inscreverNaOrigemFlutuante() {
+  floatingOrigin
+    .limpar()
+    .add(...starSystem.planets.map((planet) => planet.group))
+    .add(ship.group, scanner.pulse, scanner.beam, terraform.marcador)
+    .addVector(playerController.position);
+}
+
+inscreverNaOrigemFlutuante();
 
 /* ========================================================================== */
 /* Multijogador                                                               */
@@ -462,9 +514,12 @@ async function iniciar() {
 
 // A cena de sobreposição tem câmera própria e não passa pelo resize do Engine.
 window.addEventListener('resize', () => {
-  viewModel.redimensionar(window.innerWidth / window.innerHeight);
+  const aspecto = window.innerWidth / window.innerHeight;
+  viewModel.redimensionar(aspecto);
+  galaxyMap.redimensionar(aspecto);
 });
 viewModel.redimensionar(window.innerWidth / window.innerHeight);
+galaxyMap.redimensionar(window.innerWidth / window.innerHeight);
 
 canvas.addEventListener('click', () => {
   if (started && !painelAberto) requestPointerLock();
@@ -607,6 +662,33 @@ function board() {
 window.addEventListener('keydown', (event) => {
   if (!started || event.ctrlKey || event.metaKey || event.altKey) return;
 
+  // -------------------------------------------------------------------------
+  // O MAPA VEM ANTES DE TUDO.
+  //
+  // Com ele aberto, o jogo continua rodando por baixo — a nave está em voo
+  // livre no espaço. Se as teclas normais chegassem aqui, `F` faria desembarcar
+  // no vazio e os dígitos trocariam de ferramenta enquanto se lê o mapa. O
+  // `return` fecha o restante do teclado enquanto o mapa manda.
+  //
+  // `N` de navegação, e não `M`: `M` já é o mudo, e duas ações na mesma tecla é
+  // exatamente o que este arquivo passou a não fazer.
+  // -------------------------------------------------------------------------
+  if (event.code === 'KeyN') {
+    alternarMapa();
+    return;
+  }
+
+  if (galaxyMap.aberto) {
+    if (event.code === 'Escape') fecharMapa();
+    else if (event.code === 'Enter' || event.code === 'KeyJ') saltarPara(galaxyMap.selecionado);
+    else if (event.code === 'KeyC') galaxyMap.centralizarNoAtual();
+    else if (event.code === 'KeyF') galaxyMap.centralizarNoSelecionado();
+    // Colchetes trocam de galáxia: navegação de catálogo, sem colisão com voo.
+    else if (event.code === 'BracketLeft') galaxyMap.trocarGalaxia(-1);
+    else if (event.code === 'BracketRight') galaxyMap.trocarGalaxia(1);
+    return;
+  }
+
   if (event.code === 'KeyF') {
     if (canDisembark()) disembark();
     else if (canBoard()) board();
@@ -684,7 +766,31 @@ window.addEventListener('keydown', (event) => {
  */
 const botao = { esquerdo: false, direito: false };
 
+/* --- Mouse dentro do mapa ------------------------------------------------- */
+
+/**
+ * O mapa usa o cursor LIVRE, sem pointer lock.
+ *
+ * É o oposto do resto do jogo, e de propósito: apontar uma estrela entre
+ * milhares exige mirar com precisão absoluta na tela, e um cursor travado só
+ * entrega movimento relativo. É também por isso que abrir o mapa solta o
+ * ponteiro e fechá-lo o retoma.
+ */
+let arrastando = false;
+
 canvas.addEventListener('mousedown', (event) => {
+  if (galaxyMap.aberto) {
+    if (event.button === 0) {
+      const alvo = escolherNoMapa(event);
+      // Clicar numa estrela seleciona; clicar no vazio começa a girar a câmera.
+      if (!alvo) arrastando = true;
+      else audio.ui(true);
+    } else if (event.button === 2) {
+      arrastando = true;
+    }
+    return;
+  }
+
   if (!started || mode !== 'FOOT' || painelAberto) return;
 
   if (event.button === 0) botao.esquerdo = true;
@@ -699,9 +805,32 @@ canvas.addEventListener('mousedown', (event) => {
 });
 
 window.addEventListener('mouseup', (event) => {
+  arrastando = false;
   if (event.button === 0) botao.esquerdo = false;
   if (event.button === 2) botao.direito = false;
   if (!botao.esquerdo && !botao.direito) terraform.soltar();
+});
+
+/** Coordenadas normalizadas do evento, para o raycast do mapa. */
+function escolherNoMapa(event) {
+  const r = canvas.getBoundingClientRect();
+  return galaxyMap.escolherEm(
+    ((event.clientX - r.left) / r.width) * 2 - 1,
+    -((event.clientY - r.top) / r.height) * 2 + 1
+  );
+}
+
+canvas.addEventListener('mousemove', (event) => {
+  if (!galaxyMap.aberto) return;
+  if (arrastando) galaxyMap.orbitar(event.movementX, event.movementY);
+  else escolherNoMapa(event);
+});
+
+canvas.addEventListener('dblclick', (event) => {
+  if (!galaxyMap.aberto) return;
+  // Duplo clique numa estrela salta para ela — o gesto que todo mapa usa para
+  // "ir até aqui", e que evita procurar a tecla certa no meio da navegação.
+  if (escolherNoMapa(event)) saltarPara(galaxyMap.selecionado);
 });
 
 // Sem isto, o botão direito abre o menu do navegador por cima do jogo — e o
@@ -713,6 +842,11 @@ canvas.addEventListener('contextmenu', (event) => {
 canvas.addEventListener(
   'wheel',
   (event) => {
+    if (galaxyMap.aberto) {
+      event.preventDefault();
+      galaxyMap.aproximar(event.deltaY);
+      return;
+    }
     if (mode !== 'FOOT' || !started) return;
     event.preventDefault();
     // Sempre equipamento. Fazer a roda mudar de sentido conforme a ferramenta
@@ -746,6 +880,122 @@ function demolir() {
   viewModel.coice(0.5);
   hud.notify(`${resultado.nome.toUpperCase()} RECUPERADO`, 1.4);
   multiplayer?.construiu(resultado.evento);
+}
+
+/* ========================================================================== */
+/* Abrir e fechar o mapa                                                      */
+/* ========================================================================== */
+
+function alternarMapa() {
+  if (galaxyMap.aberto) {
+    fecharMapa();
+    return;
+  }
+
+  // O mapa é um instrumento de bordo: só faz sentido com a nave no espaço.
+  // Aberto a pé, ele mostraria um destino que o jogador não tem como alcançar.
+  if (warp.ativo) return;
+  if (mode !== 'SHIP') {
+    hud.notify('EMBARQUE NA NAVE PARA ABRIR O MAPA', 2.2);
+    audio.ui(false);
+    return;
+  }
+
+  alternarPainel(false);
+  galaxyMap.aberto = true;
+  galaxyMap.redimensionar(window.innerWidth / window.innerHeight);
+  galaxyMap.centralizarNoAtual();
+  hud.mostrarMapa(true);
+  document.exitPointerLock?.();
+  audio.ui(true);
+}
+
+function fecharMapa() {
+  if (!galaxyMap.aberto) return;
+  galaxyMap.aberto = false;
+  hud.mostrarMapa(false);
+  audio.ui(false);
+  if (started && !painelAberto) requestPointerLock();
+}
+
+/* ========================================================================== */
+/* Salto interestelar                                                         */
+/* ========================================================================== */
+
+/** Chunks que o sistema novo precisa entregar antes de a viagem terminar. */
+const CHUNKS_PARA_CHEGAR = 24;
+
+/**
+ * Onde a nave nasce ao chegar num sistema: fora da atmosfera do corpo inicial,
+ * olhando para ele. Chegar dentro do planeta seria o resultado de simplesmente
+ * manter a posição anterior — que no sistema novo significa outro lugar.
+ */
+function posicionarNaChegada() {
+  const destino = starSystem.planets[0];
+  const direcao = new THREE.Vector3(0.35, 0.42, 1).normalize();
+  ship.group.position
+    .copy(destino.group.position)
+    .addScaledVector(direcao, destino.radius * 3.2);
+  orientTowards(ship.group, destino.group.position);
+  shipController.velocity.set(0, 0, 0);
+  shipController.throttle = 0;
+  playerController.enabled = false;
+  mode = 'SHIP';
+  activePlanet = destino;
+}
+
+/** O salto é permitido? Devolve o motivo quando não. */
+function motivoParaNaoSaltar(sistema) {
+  if (warp.ativo) return 'salto em andamento';
+  if (mode !== 'SHIP') return 'embarque na nave';
+  if (!sistema) return 'nenhum sistema selecionado';
+  if (galaxyMap.atual && sistema.seed === galaxyMap.atual.seed) return 'você já está aqui';
+  if (gameState.atmosphere > 0.02) return 'saia da atmosfera';
+  if (!galaxyMap.podeSaltar(sistema)) return 'fora do alcance do hiperimpulsor';
+  return null;
+}
+
+function saltarPara(sistema) {
+  const impedimento = motivoParaNaoSaltar(sistema);
+  if (impedimento) {
+    hud.notify(impedimento.toUpperCase(), 2.2);
+    audio.ui(false);
+    return false;
+  }
+
+  audio.pulseEngage();
+  fecharMapa();
+
+  warp.iniciar({
+    cor: sistema.classe.cor,
+    /**
+     * Troca o universo no auge do clarão.
+     *
+     * `recriar` destrói planetas e workers e constrói outros no lugar, mantendo
+     * o mesmo objeto `StarSystem` — quem guardou a referência (multijogador,
+     * construção) continua válido. O que guardou PLANETAS precisa se
+     * reinscrever, e é o que as três chamadas seguintes fazem.
+     */
+    aoTrocar: () => {
+      starSystem.recriar(sistema.seed);
+      inscreverNaOrigemFlutuante();
+      posicionarNaChegada();
+
+      // Bases e escavações pertencem ao sistema onde foram feitas. Sem esta
+      // limpeza, a base construída na estrela anterior reapareceria flutuando
+      // sobre um planeta que nada tem a ver com ela.
+      build.esquecerTudo();
+
+      galaxiaAtual = sistema.galaxia;
+      galaxyMap.situar(sistema.galaxia, sistema.seed, { x: sistema.vx, y: sistema.vy, z: sistema.vz });
+      hud.notify(`SISTEMA ${nomeDoSistema(sistema.seed).toUpperCase()}`, 3.2);
+      if (contaAtiva) salvarProgresso();
+    },
+    // A viagem só termina quando há terreno para chegar em cima. Ver o
+    // cabeçalho de `galaxy/WarpJump.js`.
+    pronto: () => starSystem.isReady && starSystem.activeChunks >= CHUNKS_PARA_CHEGAR,
+  });
+  return true;
 }
 
 /* ========================================================================== */
@@ -1042,6 +1292,12 @@ function estadoDePosicao() {
   const estado = {
     planeta: planetaId,
     modo: mode,
+    // O sistema entra junto porque ele DEFINE o mundo: sem ele, restaurar a
+    // posição devolveria coordenadas certas num universo errado — o jogador
+    // apareceria no vácuo, ou dentro de um planeta que só existe aqui.
+    galaxia: galaxiaAtual,
+    sistema: starSystem.seed,
+    visitados: galaxyMap.visitadosParaLista(),
     nave: {
       pos: local(ship.group.position),
       quat: ship.group.quaternion.toArray(),
@@ -1072,6 +1328,18 @@ function estadoDePosicao() {
  */
 function restaurarPosicao(estado) {
   if (!estado || typeof estado.planeta !== 'number') return false;
+
+  galaxyMap.restaurarVisitados(estado.visitados);
+
+  // O universo vem ANTES da posição. Reconstruir depois de colocar o jogador
+  // destruiria os planetas debaixo dele e o deixaria caindo no vazio.
+  if (typeof estado.sistema === 'number' && estado.sistema !== starSystem.seed) {
+    starSystem.recriar(estado.sistema);
+    inscreverNaOrigemFlutuante();
+    build.esquecerTudo();
+  }
+  galaxiaAtual = estado.galaxia ?? 0;
+  galaxyMap.situar(galaxiaAtual, starSystem.seed);
 
   const planeta = starSystem.planets[estado.planeta];
   if (!planeta) return false;
@@ -1208,11 +1476,26 @@ engine.start((dt, elapsed) => {
   // construtor guardado, porque outro jogador pode estar construindo nela.
   build.atualizar(dt);
 
+  galaxyMap.atualizar(dt);
+  warp.atualizar(dt);
+
   viewModel.atualizar(dt, {
-    visivel: started && mode === 'FOOT' && !painelAberto,
+    visivel: started && mode === 'FOOT' && !painelAberto && !galaxyMap.aberto && !warp.ativo,
+    // A cena de sobreposição precisa continuar sendo desenhada durante o salto:
+    // é nela que o túnel vive.
+    cenaAtiva: warp.ativo,
     velocidade: playerController.speed,
     usando: botao.esquerdo || botao.direito,
   });
+
+  // O campo de visão abre com a velocidade do salto. Aplicado aqui, depois de
+  // `tuneCameraPlanes`, e SEMPRE — inclusive com o salto parado, para a lente
+  // voltar ao normal se a viagem for interrompida por qualquer motivo.
+  const fovAlvo = 72 + warp.deslocamentoFov;
+  if (Math.abs(engine.camera.fov - fovAlvo) > 0.01) {
+    engine.camera.fov = fovAlvo;
+    engine.camera.updateProjectionMatrix();
+  }
 
   // 7.05 Rede ----------------------------------------------------------------
   // Depois da física e do rebase: a posição enviada é relativa ao CENTRO DO
@@ -1358,8 +1641,19 @@ engine.start((dt, elapsed) => {
       : null
   );
 
-  hud.updateHotbar(mode === 'FOOT' && started ? { ferramentas: FERRAMENTAS, atual: ferramenta } : null);
+  hud.updateHotbar(
+    mode === 'FOOT' && started && !galaxyMap.aberto ? { ferramentas: FERRAMENTAS, atual: ferramenta } : null
+  );
   if (painelAberto) hud.atualizarPainel({ inventario: inventory, build, recursos: RESOURCES });
+  if (galaxyMap.aberto) {
+    hud.atualizarMapa({
+      ficha: galaxyMap.fichaSelecionada(),
+      galaxia: GALAXIAS[galaxyMap.galaxia]?.nome ?? '—',
+      visitados: galaxyMap.visitados.size,
+      alcance: ALCANCE_SALTO,
+      estrelas: galaxyMap._lista.length,
+    });
+  }
 
   // Prompt contextual
   if (!started) hud.setPrompt(null);
@@ -1388,7 +1682,8 @@ if (!engine.isWebGL2) {
 window.__nms = {
   engine, starSystem, ship, shipController, playerController,
   gameState, inventory, discovery, scanner, seed: SEED, cloudQuality, audio,
-  floatingOrigin, multiplayer, build, terraform, viewModel,
+  floatingOrigin, multiplayer, build, terraform, viewModel, galaxyMap, warp,
+  saltarPara, alternarMapa,
   get ferramenta() { return ferramentaAtual(); },
   equipar,
   get mode() { return mode; },

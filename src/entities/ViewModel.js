@@ -51,7 +51,15 @@ export class ViewModel {
 
     // Plano próximo curtíssimo e campo um pouco mais fechado que o do jogo: é o
     // que impede a ferramenta de parecer uma escultura gigante colada na lente.
-    this.camera = new THREE.PerspectiveCamera(55, 1, 0.01, 12);
+    //
+    // O plano DISTANTE é 240 e não 12 por causa do túnel do salto, que vive
+    // nesta mesma cena e se estende a ~59 unidades à frente da câmera. Com o
+    // valor antigo ele era inteiramente descartado pelo frustum: o campo de
+    // visão abria, o clarão acontecia, e a viagem inteira passava sem uma
+    // listra na tela. Esticar o alcance não custa precisão onde importa — ela é
+    // governada pelo plano PRÓXIMO, e aqui não há nada para disputar
+    // profundidade com a ferramenta.
+    this.camera = new THREE.PerspectiveCamera(55, 1, 0.01, 240);
     this.scene.add(this.camera);
 
     // Luz própria. A do mundo é direcional e gira com o sol — de costas para
@@ -205,8 +213,11 @@ export class ViewModel {
    * @param {boolean} estado.usando botão pressionado
    */
   atualizar(dt, estado) {
-    this.visivel = estado.visivel;
+    // `visivel` manda a CENA de sobreposição ser desenhada; `suporte` é só as
+    // mãos. São coisas diferentes desde que o túnel do salto passou a morar
+    // aqui: durante a viagem a cena precisa ser desenhada e a ferramenta, não.
     this.suporte.visible = estado.visivel;
+    this.visivel = estado.visivel || estado.cenaAtiva === true;
     if (!estado.visivel) return;
 
     // --- Balanço do passo --------------------------------------------------

@@ -56,15 +56,54 @@ export class StarSystem {
    */
   constructor(scene, seed) {
     this.scene = scene;
-    this.seed = seed;
+    this._tmp = new THREE.Vector3();
+    this._construir(seed);
+  }
 
-    const rand = mulberry32(seed ^ 0x5bf03635);
+  /**
+   * Troca o sistema inteiro por outro, NO LUGAR.
+   *
+   * -----------------------------------------------------------------------
+   * POR QUE NÃO CRIAR UM `StarSystem` NOVO
+   * -----------------------------------------------------------------------
+   * Seria o caminho óbvio e quebraria meia dúzia de referências espalhadas: o
+   * multijogador guarda `starSystem` para traduzir posições, a origem
+   * flutuante guarda os `group` dos planetas, o sistema de construção guarda
+   * `starSystem.planets`. Substituir o objeto deixaria todos eles apontando
+   * para um universo que não existe mais — e o sintoma seria sutil, porque
+   * `planets[2]` continua respondendo, só que do sistema anterior.
+   *
+   * Reconstruindo por dentro, quem guardou a referência continua certo. Quem
+   * guardou um PLANETA (e não o sistema) precisa se reinscrever, e é por isso
+   * que este método existe como uma chamada explícita em vez de um efeito
+   * colateral: `main.js` sabe que depois dele tem de refazer a origem
+   * flutuante e reposicionar a nave.
+   *
+   * @param {number} seed
+   */
+  recriar(seed) {
+    this._destruir();
+    this._construir(seed);
+  }
 
-    this.backdrop = createStarBackdrop(scene, seed);
+  _construir(seed) {
+    const scene = this.scene;
+    this.seed = seed >>> 0;
+
+    const rand = mulberry32(this.seed ^ 0x5bf03635);
+
+    this.backdrop = createStarBackdrop(scene, this.seed);
     this.sunDirection = this.backdrop.sunDirection;
     this.sunLight = this.backdrop.sunLight;
 
-    // Um pool para todos. Ver a justificativa em WorkerPool.js.
+    // Pool NOVO a cada sistema, e não reaproveitado.
+    //
+    // Reaproveitar economizaria o custo de subir seis workers (alguns
+    // milissegundos, escondidos atrás da animação do salto) e traria um
+    // problema difícil: os chunks do sistema ANTERIOR ainda em voo chegariam
+    // depois da troca, com o mesmo `planetId`, e seriam entregues a planetas
+    // que agora são outros — terreno de outra estrela costurado no mundo novo.
+    // Encerrar os workers descarta esse trabalho junto.
     this.pool = new WorkerPool(
       () => new Worker(new URL('../workers/terrain.worker.js', import.meta.url), { type: 'module' }),
       (data) => this._route(data)
@@ -102,8 +141,14 @@ export class StarSystem {
       this.planets.push(planet);
       this.byId.set(index, planet);
     });
+  }
 
-    this._tmp = new THREE.Vector3();
+  _destruir() {
+    this.pool.dispose();
+    for (const planet of this.planets) planet.dispose();
+    this.backdrop.dispose();
+    this.planets = [];
+    this.byId.clear();
   }
 
   get isReady() {
@@ -175,8 +220,6 @@ export class StarSystem {
   }
 
   dispose() {
-    this.pool.dispose();
-    for (const planet of this.planets) planet.dispose();
-    this.backdrop.dispose();
+    this._destruir();
   }
 }

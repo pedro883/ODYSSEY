@@ -1302,6 +1302,21 @@ export class BuildSystem {
     return total;
   }
 
+  /**
+   * Descarta todas as bases sem tocar no terreno.
+   *
+   * Usado no salto interestelar. Diferente de demolir: as peças não são
+   * devolvidas ao inventário e o platô não é desfeito, porque nada foi
+   * destruído — o jogador apenas saiu do sistema, e a base continua lá para
+   * quando ele voltar. O que se apaga é a CÓPIA em memória, que pertence a um
+   * universo que não está mais na cena.
+   */
+  esquecerTudo() {
+    for (const base of [...this.bases.values()]) this._descartarBase(base);
+    this._aplanarPendente.clear();
+    this._animando = false;
+  }
+
   dispose() {
     for (const base of [...this.bases.values()]) this._descartarBase(base);
     this._grupoFantasma.removeFromParent();
