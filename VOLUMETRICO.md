@@ -62,10 +62,23 @@ toda divergência é defeito do mesher, não mudança de conteúdo.
       volumétrico (devolve array vazio), e as cavernas existem mas ainda não há
       como descer até elas.
 
-- [ ] **3. Octree no lugar da quadtree**
-      A quadtree é 2D, uma por face do cubo. Volume exige subdivisão em três
-      eixos. É o passo com mais risco de regressão de desempenho: um bloco de
-      32³ tem 32x as amostras de um retalho 32².
+- [x] **3a. Protocolo de faixa radial**
+      O chunk passou a ser pedido por FAIXA DE PROFUNDIDADE abaixo da superfície
+      local, e não por raios absolutos. É a coordenada natural do problema (as
+      cavernas são definidas por profundidade), e um relevo que varia 200
+      unidades dentro do chunk faria uma faixa absoluta cobrir a superfície num
+      canto e o subsolo no outro.
+
+      Verificado: a faixa 0 devolve V2901 F5524 — bit a bit o mesmo de antes.
+      As faixas fundas mostram o que estava invisível: a faixa 200..310 tem 2.599
+      vértices de caverna que nunca eram desenhados.
+
+- [ ] **3b. Pedir as faixas fundas quando o jogador desce**
+      **Precisa de mais de uma malha por nó da quadtree**, e hoje `QuadTreeNode`
+      tem `this.mesh` singular e um `requestId` só. Toca `attachMesh`,
+      `releaseMesh`, `setVisible`, `dispose`, a chave do cache e a chave dos
+      props. É a mudança estrutural que o passo 3 sempre foi — o protocolo (3a)
+      era a parte segura.
 
 - [x] **4a. Sonda do campo (`sonda.js`)**
       `chaoAbaixo`, `tetoAcima`, `solidoEm` por marcha radial com bisseção.

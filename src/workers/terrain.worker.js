@@ -132,6 +132,11 @@ function construirChunkVolumetrico(req, cfg, sampler, campo) {
     size,
     resAngular: cfg.lod.chunkRes,
     resRadial: RES_RADIAL,
+    // A faixa vem da REQUISIÇÃO. Hoje só a faixa 0 é pedida (o padrão do
+    // mesher), o que reproduz o comportamento anterior exatamente; o protocolo
+    // já aceita faixas mais fundas para quando o `ChunkManager` souber pedi-las.
+    profundidadeDe: req.profundidadeDe,
+    profundidadeAte: req.profundidadeAte,
   });
 
   // As posições saem em espaço LOCAL do planeta; o resto do jogo espera que

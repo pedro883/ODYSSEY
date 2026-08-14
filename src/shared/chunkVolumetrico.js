@@ -45,8 +45,9 @@ import { malharCampo } from './marchingCubes.js';
  * @param {number} o.size aresta angular da região, fração da face
  * @param {number} o.resAngular células ao longo de u e de v
  * @param {number} o.resRadial células ao longo do raio
- * @param {number} [o.folgaAbaixo] unidades abaixo da elevação mínima
- * @param {number} [o.folgaAcima] unidades acima da elevação máxima
+ * @param {number} [o.profundidadeDe] início da faixa, em unidades ABAIXO da
+ *   superfície local (negativo = acima dela)
+ * @param {number} [o.profundidadeAte] fim da faixa, em unidades abaixo
  */
 export function malharChunkVolumetrico({
   cfg,
@@ -57,8 +58,8 @@ export function malharChunkVolumetrico({
   size,
   resAngular = 32,
   resRadial = 24,
-  folgaAbaixo = 90,
-  folgaAcima = 12,
+  profundidadeDe = -12,
+  profundidadeAte = 90,
 }) {
   const na = resAngular;
   const nr = resRadial;
@@ -98,9 +99,21 @@ export function malharChunkVolumetrico({
     }
   }
 
+  // -------------------------------------------------------------------------
   // 2. Faixa radial coberta pela casca.
-  const rMin = hMin - folgaAbaixo;
-  const rMax = hMax + folgaAcima;
+  //
+  // A faixa é expressa em PROFUNDIDADE abaixo da superfície local, e não em
+  // raios absolutos. É a coordenada natural do problema: as cavernas são
+  // definidas por profundidade (ver `margemTeto` e `profundidadeMaxima` em
+  // `densidade.js`), e um relevo que varia 200 unidades dentro do chunk faria
+  // uma faixa absoluta cobrir a superfície num canto e o subsolo no outro.
+  //
+  // A faixa 0 vai de 12 acima da elevação MÁXIMA até 90 abaixo da MÍNIMA — que
+  // é o comportamento de sempre. Faixas mais fundas usam o mesmo referencial e
+  // se encaixam sem sobreposição.
+  // -------------------------------------------------------------------------
+  const rMax = hMax - profundidadeDe;
+  const rMin = hMin - profundidadeAte;
   const passoRad = (rMax - rMin) / nr;
 
   /** Posição de mundo de um nó `(a, b, r)` da grade. */
