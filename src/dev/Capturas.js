@@ -26,13 +26,24 @@ const passo = () => new Promise((r) => setTimeout(r, 0));
 export const HORA = 0;
 
 /** Roda o laço do jogo N vezes sem depender do requestAnimationFrame. */
-async function rodar(quadros, aoRodar) {
+async function rodar(quadros, aoRodar, aoRodarDepois) {
   const n = window.__nms;
   for (let i = 0; i < quadros; i++) {
     aoRodar?.(i);
     // O `elapsed` fica parado; só o `dt` avança, para que ondas, nuvens e
     // animações continuem correndo sem mexer na posição do sol.
     n.engine._update(1 / 60, HORA);
+    // -------------------------------------------------------------------
+    // O SEGUNDO GANCHO RODA DEPOIS DA FÍSICA, e é o que permite enquadrar.
+    //
+    // `_update` chama `shipController.update`, que AUTO-NIVELA a nave em
+    // direção ao horizonte. Definir a orientação antes dele funciona para
+    // panorâmicas — o auto-nível concorda com elas — e é apagado em qualquer
+    // enquadramento mergulhado. Foi o que fez quatro tentativas de fotografar
+    // uma boca de caverna saírem apontadas para o céu, sem erro nenhum: a
+    // orientação era aplicada e desfeita no mesmo quadro.
+    // -------------------------------------------------------------------
+    aoRodarDepois?.(i);
     await passo();
   }
 }
@@ -124,18 +135,116 @@ export async function capturar(nome, { ponto, altura = 60, distanciaAlvo = 200, 
     .clone()
     .addScaledVector(dirAlvo, Math.max(sAlvo.surfaceRadius, p.config.radius) + alturaAlvo);
 
-  await rodar(quadros, () => {
-    n.ship.group.position
+  const olho = new V();
+  const paraAlvo = new V();
+  const cima = new V();
+
+  const fixar = () => {
+    olho
       .copy(p.group.position)
       .addScaledVector(ponto.d, Math.max(ponto.s.surfaceRadius, p.config.radius) + altura);
+    n.ship.group.position.copy(olho);
     n.shipController.velocity.set(0, 0, 0);
     n.shipController.throttle = 0;
     n.ship.group.quaternion.setFromRotationMatrix(
-      new M4().lookAt(n.ship.group.position, alvo, ponto.d)
+      new M4().lookAt(olho, alvo, escolherCima(paraAlvo.copy(alvo).sub(olho), ponto.d, cima))
     );
+  };
+
+  // Antes E depois: antes para que a física deste quadro parta do lugar certo,
+  // depois para desfazer o auto-nível. A câmera é reposicionada em seguida,
+  // porque `updateCamera` já rodou dentro de `_update` com a pose antiga.
+  await rodar(quadros, fixar, () => {
+    fixar();
+    n.shipController.updateCamera(n.engine.camera, 1);
   });
 
   return enviar(nome);
+}
+
+/**
+ * Um "para cima" que nunca é paralelo à direção do olhar.
+ *
+ * ===========================================================================
+ * POR QUE ISTO PRECISOU EXISTIR
+ * ===========================================================================
+ * A bancada sempre usou a direção RADIAL como `up`, o que é certo para
+ * panorâmicas: o horizonte fica nivelado. Mas ao mirar quase para baixo — que é
+ * o enquadramento de uma boca de caverna — a direção do olhar fica paralela ao
+ * radial, `lookAt` degenera e a câmera aponta para qualquer lugar.
+ *
+ * Perdi quatro tentativas de fotografar uma caverna com isso, todas terminando
+ * com a câmera virada para o céu. O sintoma engana porque não há erro nenhum:
+ * a matriz sai válida, só que arbitrária.
+ *
+ * A saída é trocar o `up` por uma tangente quando o olhar se aproxima do
+ * radial. O horizonte deixa de estar nivelado, o que não faz falta numa foto
+ * que aponta para dentro de um buraco.
+ *
+ * @param {THREE.Vector3} olhar direção do olhar (não precisa ser unitária)
+ * @param {THREE.Vector3} radial direção "para cima" preferida
+ * @param {THREE.Vector3} saida
+ */
+function escolherCima(olhar, radial, saida) {
+  const len = olhar.length() || 1;
+  const alinhamento = Math.abs(olhar.dot(radial) / len);
+
+  // Até ~70 graus do horizonte o radial serve e mantém o horizonte nivelado.
+  if (alinhamento < 0.94) return saida.copy(radial);
+
+  // Perto da vertical: qualquer tangente serve como referência de rolagem.
+  saida.set(-radial.y, radial.x, 0);
+  if (saida.lengthSq() < 1e-8) saida.set(1, 0, 0);
+  return saida.normalize();
+}
+
+/**
+ * Captura com a CÂMERA posta à mão, sem passar pela nave.
+ *
+ * ===========================================================================
+ * POR QUE EXISTE, DEPOIS DE DUAS CORREÇÕES QUE NÃO BASTARAM
+ * ===========================================================================
+ * `capturar` enquadra movendo a NAVE e deixando a câmera de terceira pessoa
+ * segui-la. Isso serve para panorâmicas e falha em qualquer enquadramento
+ * mergulhado, por dois motivos empilhados:
+ *
+ *   1. a física auto-nivela a nave em direção ao horizonte, apagando o
+ *      mergulho no mesmo quadro em que ele é aplicado;
+ *   2. `updateCamera` rederiva a orientação do estado do CONTROLADOR, não do
+ *      quaternion da nave — então reaplicá-lo depois da física também não
+ *      resolve.
+ *
+ * Tentei corrigir os dois e continuei fotografando o céu. Para uma foto, a
+ * nave é um intermediário que não acrescenta nada: esta função põe a câmera
+ * onde se quer, aponta para onde se quer, e desenha. O laço do jogo nem roda.
+ *
+ * @param {string} nome arquivo de saída
+ * @param {THREE.Vector3} de posição da câmera, em espaço de cena
+ * @param {THREE.Vector3} para ponto observado
+ * @param {THREE.Vector3} [radial] "para cima" preferido (ver `escolherCima`)
+ */
+export async function capturarCamera(nome, de, para, radial) {
+  const n = window.__nms;
+  const cam = n.engine.camera;
+  const V = cam.position.constructor;
+  const M4 = cam.matrixWorld.constructor;
+
+  enquadrar();
+  const cima = escolherCima(
+    new V().copy(para).sub(de),
+    radial ?? new V().copy(de).normalize(),
+    new V()
+  );
+
+  cam.position.copy(de);
+  cam.quaternion.setFromRotationMatrix(new M4().lookAt(de, para, cima));
+  cam.updateMatrixWorld(true);
+
+  // Sem `_update`: qualquer passo do jogo devolveria a câmera ao controlador.
+  n.engine.render();
+  const url = n.engine.renderer.domElement.toDataURL('image/jpeg', 0.9);
+  await fetch('/__captura/' + nome, { method: 'POST', body: url });
+  return nome;
 }
 
 /** Sequência padrão: terreno de perto, panorâmica e beira-mar. */
