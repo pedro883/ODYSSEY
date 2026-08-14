@@ -189,7 +189,7 @@ function construirChunkVolumetrico(req, cfg, sampler, campo) {
     // LOD), então serve aos dois caminhos sem nenhuma adaptação: ele só precisa
     // do centro do chunk para devolver posições relativas a ele.
     props: withProps
-      ? scatterProps(req, cfg, sampler, { cx: centro[0], cy: centro[1], cz: centro[2] })
+      ? scatterProps(req, cfg, sampler, { cx: centro[0], cy: centro[1], cz: centro[2] }, densidade)
       : new Float32Array(0),
     center: centro,
     boundingRadius: Math.sqrt(raioEnv),
@@ -472,7 +472,7 @@ function sementeDaCelula(planetId, face, ci, cj) {
  * mexe. O sorteio grosseiro (`PESO_MAXIMO`) derruba boa parte dos candidatos
  * antes disso.
  */
-function scatterProps(req, cfg, sampler, grid) {
+function scatterProps(req, cfg, sampler, grid, densidade = null) {
   const { face, u0, v0, size, planetId } = req;
   const { cx, cy, cz } = grid;
 
@@ -523,6 +523,29 @@ function scatterProps(req, cfg, sampler, grid) {
 
       // Nada nasce debaixo d'água.
       if (cfg.hasWater && elev < 0) continue;
+
+      // -----------------------------------------------------------------
+      // NEM SOBRE UMA BOCA DE CAVERNA.
+      //
+      // Os props são posicionados em `raio + heightAt`, que é a superfície do
+      // campo de ALTURA. Onde uma boca abre, o terreno volumétrico está
+      // dezenas de unidades abaixo disso — e a vegetação ficava PAIRANDO sobre
+      // o buraco, que é justamente o lugar onde o jogador está olhando com
+      // atenção.
+      //
+      // Uma amostra de densidade logo abaixo da superfície responde a
+      // pergunta: se ali não há rocha, esta célula é boca e não recebe prop.
+      // Custa uma avaliação barata (a altura já está calculada) e só nos
+      // chunks volumétricos.
+      // -----------------------------------------------------------------
+      if (densidade) {
+        const rSup = cfg.radius + elev;
+        if (densidade.densidadeComAltura(
+              dir[0] * (rSup - 1.5), dir[1] * (rSup - 1.5), dir[2] * (rSup - 1.5),
+              rSup, rSup - 1.5) > 0) {
+          continue;
+        }
+      }
 
       // --- Declive por diferenças finitas em duas tangentes ----------------
       tan[0] = -dir[1]; tan[1] = dir[0]; tan[2] = 0;

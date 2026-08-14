@@ -116,10 +116,10 @@ toda divergência é defeito do mesher, não mudança de conteúdo.
 
 ## Pendências conhecidas
 
-- **Props flutuam sobre as bocas.** `scatterProps` os coloca em
-  `raio + heightAt`, que é a superfície do campo de ALTURA. Onde uma boca abre,
-  o terreno volumétrico está abaixo disso e a vegetação fica pairando sobre o
-  buraco. Precisa consultar a sonda — é o passo 6b.
+- [x] **6b. Props não nascem sobre bocas.** Uma amostra de densidade 1,5 unidade
+  abaixo da superfície responde se ali há rocha; se não há, a célula é boca e
+  não recebe prop. Custa uma avaliação barata (a altura já está calculada) e só
+  nos chunks volumétricos. 5.651 props na superfície, nenhum pairando.
 - **Passo 3 (octree) e passo 5 (costuras de LOD) não foram feitos.** A quadtree
   atual subdivide só nos eixos angulares, então a casca radial tem espessura
   fixa: cavernas mais fundas que ~90 unidades abaixo da elevação mínima não são
