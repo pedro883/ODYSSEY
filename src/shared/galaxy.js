@@ -269,11 +269,50 @@ const PREFIXOS = ['Ael', 'Bor', 'Cyn', 'Dra', 'Eri', 'Fen', 'Gal', 'Hyr', 'Iso',
 const MEIOS = ['a', 'e', 'i', 'o', 'u', 'ae', 'ia', 'or', 'un', 'yr'];
 const SUFIXOS = ['dor', 'nis', 'tara', 'vex', 'lum', 'kar', 'mira', 'thys', 'nova', 'reon', 'zar', 'phae'];
 
-export function nomeDoSistema(seed) {
+/**
+ * Nome de um sistema — ÚNICO em toda a galáxia.
+ *
+ * ---------------------------------------------------------------------------
+ * POR QUE A PARTE PRONUNCIÁVEL NÃO BASTA
+ * ---------------------------------------------------------------------------
+ * As três tabelas de sílabas geram 22 × 10 × 12 = 2 640 combinações, para cerca
+ * de 178 mil sistemas. Não é um risco de colisão: é a garantia de que dezenas
+ * de sistemas dividem o mesmo nome. Enquanto ninguém comparava dois deles isso
+ * passava despercebido; a partir do momento em que um sistema tem DONO — quem o
+ * descobriu —, dois "Kelaenova" diferentes tornam a informação inútil.
+ *
+ * ---------------------------------------------------------------------------
+ * A DESIGNAÇÃO É UMA BIJEÇÃO DO ENDEREÇO
+ * ---------------------------------------------------------------------------
+ * O sufixo não é um hash: é o endereço do sistema (galáxia, voxel e índice)
+ * empacotado em 31 bits e escrito em base 36. Dois sistemas distintos têm
+ * endereços distintos, logo designações distintas — a unicidade é aritmética,
+ * não estatística, e continua valendo sem nenhum registro central.
+ *
+ * O empacotamento assume |x|,|y|,|z| < 128 e no máximo 8 sistemas por voxel.
+ * Com `RAIO_GALAXIA` 96, `ESPESSURA_DISCO` 7 e `MAX_POR_VOXEL` 3 sobra folga;
+ * quem aumentar esses limites precisa alargar os campos aqui junto.
+ *
+ * @param {{galaxia:number, vx:number, vy:number, vz:number, indice:number, seed:number}} sistema
+ */
+export function nomeDoSistema(sistema) {
+  const seed = sistema.seed;
   const a = PREFIXOS[misturar(seed ^ 0x1b873593) % PREFIXOS.length];
   const b = MEIOS[misturar(seed ^ 0xcc9e2d51) % MEIOS.length];
   const c = SUFIXOS[misturar(seed ^ 0x38b34ae5) % SUFIXOS.length];
-  return `${a}${b}${c}`;
+
+  const empacotado =
+    (((sistema.galaxia & 0x0f) << 27) |
+      (((sistema.vx + 128) & 0xff) << 19) |
+      (((sistema.vy + 128) & 0xff) << 11) |
+      (((sistema.vz + 128) & 0xff) << 3) |
+      (sistema.indice & 0x07)) >>>
+    0;
+
+  // Base 36 preenchida à esquerda: a designação tem sempre o mesmo comprimento,
+  // então nomes em lista ficam alinhados e dá para comparar dois de relance.
+  const designacao = empacotado.toString(36).toUpperCase().padStart(6, '0');
+  return `${a}${b}${c} ${designacao.slice(0, 3)}-${designacao.slice(3)}`;
 }
 
 /**

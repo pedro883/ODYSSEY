@@ -408,13 +408,12 @@ body {
 
 /* --------------------------- Mapa galactico ------------------------------ */
 
-/* O HUD de voo some sob o mapa: velocidade e bioma nao dizem nada enquanto se
-   olha uma galaxia, e as caixas tapariam os cantos que a ficha precisa. */
-#hud.oculto-por-mapa > .panel,
-#hud.oculto-por-mapa > #reticle,
-#hud.oculto-por-mapa > #hotbar,
-#hud.oculto-por-mapa > #buildbar,
-#hud.oculto-por-mapa > #prompt { display: none; }
+/* O HUD INTEIRO some sob o mapa: velocidade, bioma e carga nao dizem nada
+   enquanto se olha uma galaxia, e as caixas tapariam os cantos que a ficha
+   precisa. Os marcadores de planeta entram na regra por estarem FORA do #hud —
+   eles apontavam corpos de um sistema que a tela nem esta mostrando. */
+body.modo-mapa #hud,
+body.modo-mapa #markers { display: none; }
 
 #mapa {
   position: absolute;
@@ -472,6 +471,10 @@ body {
 }
 .ficha-tag.atual { color: var(--gold); border-color: var(--gold); opacity: 1; }
 .ficha-tag.visitado { color: var(--shield); border-color: var(--shield); opacity: 1; }
+/* Sistema sem dono. Fica em destaque, e nao apagado: um lugar onde ninguem
+   esteve e o unico que ainda pode levar o nome de quem chegar. */
+.ficha-tag.inedito { color: var(--accent); border-color: var(--accent); opacity: 0.9; }
+.mapa-ficha dd.inedito { opacity: 0.4; }
 
 .mapa-ficha h2 {
   margin: 12px 0 2px;
@@ -747,6 +750,91 @@ body {
 }
 
 .painel-rodape kbd { color: var(--accent); }
+
+/* -------------------------------- Chat ---------------------------------- */
+
+/* Canto inferior esquerdo, acima do painel de performance. O historico e
+   somente leitura e nao intercepta o mouse: so a caixa de digitacao recebe
+   clique, e so enquanto esta aberta. */
+#chat {
+  position: absolute;
+  left: 18px;
+  bottom: 150px;
+  width: 380px;
+  pointer-events: none;
+  z-index: 12;
+}
+
+#chat-log {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 2px;
+  max-height: 190px;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+#chat-log li {
+  /* Sombra em vez de caixa: o texto precisa ser legivel sobre neve e sobre
+     ceu noturno sem tapar o mundo com um retangulo opaco. */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 10px rgba(0, 0, 0, 0.7);
+  color: rgba(226, 240, 247, 0.92);
+  animation: chat-entra 0.25s ease;
+}
+
+/* Some devagar depois de um tempo parado: conversa antiga nao precisa ocupar
+   a tela de quem esta voando. A classe e posta pelo HUD. */
+#chat-log li.velha { opacity: 0.35; transition: opacity 1.2s ease; }
+
+#chat-log b { font-weight: 500; color: var(--accent); }
+#chat-log li.global b { color: var(--gold); }
+#chat-log li.sistema-info { color: rgba(226, 240, 247, 0.55); font-style: italic; }
+
+@keyframes chat-entra {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+#chat-form {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  pointer-events: auto;
+  border: 1px solid rgba(88, 232, 255, 0.35);
+  background: rgba(4, 10, 16, 0.78);
+  backdrop-filter: blur(3px);
+}
+
+#chat-form.hidden { display: none; }
+
+#chat-escopo {
+  padding: 6px 8px;
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  align-self: center;
+  color: var(--accent);
+  border-right: 1px solid rgba(88, 232, 255, 0.25);
+}
+
+#chat-escopo.global { color: var(--gold); border-right-color: rgba(255, 215, 122, 0.3); }
+
+#chat-input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 7px 9px;
+  outline: none;
+}
+
+#chat-input::placeholder { color: rgba(226, 240, 247, 0.35); }
 
 /* ------------------------------- Banner --------------------------------- */
 

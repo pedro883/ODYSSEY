@@ -97,7 +97,22 @@ export function createPlanetConfig(seed, scale = 1) {
   // O sorteio acontece na escala 1 e só depois é multiplicado: assim a escala
   // não consome números do gerador e o mesmo seed produz o MESMO mundo, grande
   // ou pequeno. Trocar a ordem faria uma lua ser um planeta diferente.
-  const radius = between(2200, 3200) * scale;
+  // ---------------------------------------------------------------------------
+  // ESCALA DO CORPO
+  //
+  // Quase o dobro do que era (2200–3200). O que se ganha não é o número: é o
+  // HORIZONTE. Num raio de 2500 o chão encurva visivelmente a poucas centenas
+  // de unidades, e a superfície lê como uma bola pequena — de pé dá para
+  // perceber a curvatura, o que denuncia a escala e faz montanha nenhuma
+  // parecer grande. Dobrando, a linha do horizonte recua e o mundo passa a
+  // parecer um mundo.
+  //
+  // O preço é real e está pago logo abaixo, em `lod.maxLevel`: com o dobro do
+  // raio, o menor chunk teria o dobro do tamanho e o chão ficaria mais grosso
+  // justamente onde se anda. Um nível a mais de quadtree devolve a resolução
+  // original ao nível dos olhos.
+  // ---------------------------------------------------------------------------
+  const radius = between(4300, 6200) * scale;
   const maxElevation = radius * between(0.022, 0.042);
 
   // --- Paleta ------------------------------------------------------------
@@ -117,6 +132,12 @@ export function createPlanetConfig(seed, scale = 1) {
     sand: hslToLinear(soilHue + 0.02, 0.42, 0.60),
     grass: hslToLinear(vegHue, type === 'exótico' ? 0.72 : 0.45, 0.34),
     dry: hslToLinear(soilHue, 0.40, 0.44),
+    // Mata fechada: mesmo matiz da vegetação, porém mais escura e mais
+    // saturada. Existe para dar ao eixo da umidade um TERCEIRO ponto — antes
+    // ele ia de seco a gramado e parava aí, então uma floresta e uma planície
+    // eram a mesma cor com meio tom de diferença. Não consome o gerador (é só
+    // aritmética sobre `vegHue`), então nenhum planeta existente muda por isso.
+    forest: hslToLinear((vegHue + 0.96) % 1, type === 'exótico' ? 0.78 : 0.52, 0.21),
     tundra: hslToLinear((vegHue + 0.08) % 1, 0.18, 0.42),
     rock: hslToLinear(soilHue, 0.12, type === 'vulcânico' ? 0.16 : 0.30),
     snow: toLinear(0xf2f7ff),
@@ -161,7 +182,17 @@ export function createPlanetConfig(seed, scale = 1) {
     between(0.52, 0.62);
 
   const atmosphere = {
-    height: radius * between(0.075, 0.11),
+    // ------------------------------------------------------------------
+    // A ATMOSFERA FICOU MAIS ALTA — quase o dobro da fração de antes
+    // (0,075–0,11 do raio), e sobre um raio que também dobrou.
+    //
+    // Não é enfeite: é o tempo de voo dentro do azul. Com a casca fina, a
+    // transição de céu para espaço acontecia em poucos segundos de subida e a
+    // reentrada era um piscar — a parte mais bonita do voo passava rápido
+    // demais para ser vista. Com a casca alta, subir e descer viram trechos do
+    // voo, com o céu clareando e escurecendo aos poucos.
+    // ------------------------------------------------------------------
+    height: radius * between(0.14, 0.20),
     rayleigh: scatteringCoefficients(skyHue),
     mie: toLinear(0xffe9c4),
     // Cor PERCEBIDA do céu diurno. Separada dos coeficientes acima de
@@ -249,6 +280,35 @@ export function createPlanetConfig(seed, scale = 1) {
       mountainness: between(0.6, 1.3),
       oceanBias: hasWater ? between(0.02, 0.22) : -0.35,
       lapseRate: between(0.3, 0.6),
+
+      // -------------------------------------------------------------------
+      // PARÂMETROS NOVOS FICAM NO FIM DA LISTA.
+      //
+      // `between()` consome o gerador, então inserir um sorteio no meio
+      // desloca TODOS os seguintes: o mesmo seed passaria a produzir outro
+      // planeta, com outro relevo debaixo das bases já construídas. Acrescentar
+      // no fim mantém cada mundo existente como está e só acrescenta as
+      // feições novas.
+      // -------------------------------------------------------------------
+
+      // Expoente do realce de cume. 1 devolve o ridged puro (relevo ondulado
+      // uniforme); acima de 2 o vale achata e a crista cresce, que é o que dá
+      // silhueta de cordilheira em vez de campo de calombos.
+      peakSharpness: between(2.2, 3.4),
+      // Escala das manchas de clima — a que se percorre a pé. Com raio ~2400,
+      // uma frequência de 6 dá manchas de ~400 unidades: bosque, campo e areia
+      // dentro da mesma caminhada.
+      patchFreq: between(4.5, 7.5),
+      // Quanto a mancha regional desloca umidade e temperatura. 0,3 é grande o
+      // bastante para atravessar os limiares de bioma (0,34 e 0,62) sem apagar
+      // o clima planetário, que continua mandando na média.
+      patchAmp: between(0.24, 0.34),
+      // Cânions. A frequência controla quantos veios existem; a profundidade,
+      // em fração de `maxElevation`, o quanto eles cortam. Metade dos mundos
+      // quase não tem (o sorteio começa perto de zero), porque um planeta
+      // inteiro rachado é tão monótono quanto um sem nenhuma fenda.
+      gorgeFreq: between(2.2, 4.2),
+      gorgeDepth: between(0.0, 0.9),
     },
 
     // --- LOD ---------------------------------------------------------------
@@ -257,8 +317,11 @@ export function createPlanetConfig(seed, scale = 1) {
       // Potência de 2 mantém o index buffer compartilhável entre níveis.
       chunkRes: 32,
       // Profundidade máxima da quadtree. Tamanho do menor chunk =
-      // 2*radius / 2^maxLevel  ≈ 11 unidades para radius=2800, level=9.
-      maxLevel: 9,
+      // 2*radius / 2^maxLevel ≈ 11 unidades — o mesmo de antes, agora com o
+      // dobro do raio e um nível a mais. O número de chunks VISÍVEIS não muda
+      // com a profundidade (a quadtree só desce onde a câmera está); o que
+      // cresce é a altura da árvore, que custa alguns nós a mais por frame.
+      maxLevel: 10,
       // Quanto MAIOR, mais cedo o chunk subdivide (mais detalhe, mais draw calls).
       splitFactor: 1.7,
       // Profundidade da "saia" que esconde as fissuras entre níveis de LOD,

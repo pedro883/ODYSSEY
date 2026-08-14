@@ -51,7 +51,10 @@ export class Multiplayer {
    * @param {number} contexto.seed seed em uso agora
    * @param {(texto: string) => void} [contexto.aviso] callback para o HUD
    */
-  constructor({ scene, starSystem, url, seed, aviso, aoConstruir, aoTerraformar, aoExpirarTerreno }) {
+  constructor({
+    scene, starSystem, url, seed, seedExplicito, aviso,
+    aoConstruir, aoTerraformar, aoExpirarTerreno, aoDescobrir, aoChat,
+  }) {
     this.scene = scene;
     this.starSystem = starSystem;
     this.url = url;
@@ -63,6 +66,17 @@ export class Multiplayer {
     this.aoTerraformar = aoTerraformar ?? (() => {});
     /** Desfaz escavações que estouraram o orçamento do planeta. */
     this.aoExpirarTerreno = aoExpirarTerreno ?? (() => {});
+    /** Registra no mapa quem descobriu um sistema. */
+    this.aoDescobrir = aoDescobrir ?? (() => {});
+    /** Uma linha de chat chegou (local ou global). */
+    this.aoChat = aoChat ?? (() => {});
+    /**
+     * O jogador escolheu o sistema (veio de `?seed=` ou de um save)?
+     *
+     * Decide se este cliente adota o sistema de entrada da sala ao conectar.
+     * Ver `_alinharSeed`.
+     */
+    this.seedExplicito = !!seedExplicito;
 
     this.id = null;
     this.conectado = false;
@@ -193,14 +207,40 @@ export class Multiplayer {
   }
 
   _entrar() {
-    this.socket.send(JSON.stringify({ type: 'join', nome: this.nome }));
+    // O seed vai no `join`: é ele que diz ao servidor em qual CANAL este
+    // jogador entra. Ver o cabeçalho de canais em `server/mp-server.js`.
+    this.socket.send(JSON.stringify({ type: 'join', nome: this.nome, seed: this.seed >>> 0 }));
   }
 
   /**
-   * Alinha o universo ao da sala.
+   * Avisa a sala de que este jogador trocou de sistema.
+   *
+   * Chamado no auge do clarão do salto, quando o universo local já foi
+   * reconstruído. Os avatares remotos são apagados AQUI, e não ao receber o
+   * mundo novo: entre uma coisa e outra passam alguns quadros, e neles os
+   * jogadores do sistema anterior continuariam desenhados sobre um planeta que
+   * não é mais o deles.
+   */
+  mudarSistema(seed) {
+    this.seed = seed >>> 0;
+    this._limparRemotos();
+    if (!this.conectado) return;
+    this.socket.send(JSON.stringify({ type: 'sistema', seed: this.seed }));
+  }
+
+  /**
+   * Adota o sistema de entrada da sala — SÓ para quem não escolheu um.
+   *
+   * Antes isto era obrigatório: o servidor ditava o universo e qualquer cliente
+   * com outro seed era recarregado até coincidir. Com os canais, seeds
+   * diferentes não são mais um conflito a resolver, e sim dois lugares
+   * diferentes da galáxia. O realinhamento sobrou para o caso que ele de fato
+   * servia: abrir o jogo sem escolher nada e cair junto de quem já está lá.
+   *
    * @returns {boolean} `true` se vai recarregar (quem chamou deve parar)
    */
   _alinharSeed(seedDaSala) {
+    if (this.seedExplicito) return false;
     if ((seedDaSala >>> 0) === (this.seed >>> 0)) return false;
     const url = new URL(location.href);
     url.searchParams.set('seed', String(seedDaSala >>> 0));
@@ -227,28 +267,26 @@ export class Multiplayer {
       case 'welcome': {
         this.id = mensagem.id;
         if (this._alinharSeed(mensagem.seed)) return;
-
-        for (const [chave, indices] of mensagem.colhidos) this._aplicarColheita(chave, indices);
-        // As bases inteiras chegam aqui, de uma vez. Cada evento carrega o
-        // referencial da própria base (ver `BuildSystem.aplicar`), então a
-        // ordem em que eles chegam não importa — inclusive se a peça que criou
-        // a base for demolida antes de você entrar.
-        // `animar: false` — a base já existia antes de você chegar. Vê-la
-        // brotar do chão na entrada faria uma construção de semanas atrás
-        // parecer que acabou de acontecer.
-        for (const evento of mensagem.construcoes ?? []) this.aoConstruir({ ...evento, animar: false });
-        // `emBloco` — ver `aoTerraformar` em `main.js`. Restaurar uma a uma
-        // corre contra a geração de terreno que já está em curso desde o boot.
-        for (const [planeta, lista] of mensagem.terreno ?? []) this.aoTerraformar?.(planeta, lista, true);
-        for (const jogador of mensagem.jogadores) {
-          this._garantirRemoto(jogador.id, jogador.nome);
-          // `estado` pode ser nulo: quem entrou e ainda não se moveu existe na
-          // sala e precisa constar na lista, mesmo sem posição conhecida.
-          if (jogador.estado) this._atualizarRemoto(jogador.id, jogador.estado, true);
-        }
-        this.aviso(`MULTIJOGADOR: ${mensagem.jogadores.length + 1} NA SALA`);
+        this._aplicarMundo(mensagem);
+        // O catálogo de descobertas só vem no `welcome`: é da galáxia inteira e
+        // não muda ao trocar de sistema.
+        for (const registro of mensagem.descobertas ?? []) this.aoDescobrir?.(registro, true);
+        this.aviso(`MULTIJOGADOR: ${mensagem.jogadores.length + 1} NESTE SISTEMA`);
         break;
       }
+
+      case 'mundo':
+        // Chegada num sistema novo depois de um salto. Mesmo conteúdo do
+        // `welcome`, sem identidade nem catálogo — só o mundo local.
+        this._aplicarMundo(mensagem);
+        if (mensagem.jogadores.length > 0) {
+          this.aviso(`${mensagem.jogadores.length} PILOTO(S) NESTE SISTEMA`);
+        }
+        break;
+
+      case 'chat':
+        this.aoChat?.(mensagem);
+        break;
 
       case 'entrou':
         this._garantirRemoto(mensagem.id, mensagem.nome);
@@ -258,6 +296,10 @@ export class Multiplayer {
       case 'state':
         this._garantirRemoto(mensagem.id, `Piloto ${mensagem.id}`);
         this._atualizarRemoto(mensagem.id, mensagem.estado, false);
+        break;
+
+      case 'descoberta':
+        this.aoDescobrir?.(mensagem);
         break;
 
       case 'harvest':
@@ -283,6 +325,50 @@ export class Multiplayer {
         this._remover(mensagem.id);
         break;
     }
+  }
+
+  /**
+   * Materializa o mundo de um sistema: colheitas, bases, escavações e quem
+   * está lá.
+   *
+   * Um caminho só para os dois momentos em que isso acontece — entrar na sala
+   * e chegar de um salto. Eram dois blocos iguais, e blocos iguais divergem: a
+   * diferença só apareceria depois de um salto, que é justamente o caso mais
+   * chato de reproduzir.
+   */
+  _aplicarMundo(mensagem) {
+    for (const [chave, indices] of mensagem.colhidos ?? []) this._aplicarColheita(chave, indices);
+
+    // As bases inteiras chegam de uma vez. Cada evento carrega o referencial da
+    // própria base (ver `BuildSystem.aplicar`), então a ordem não importa —
+    // inclusive se a peça que criou a base foi demolida antes de você chegar.
+    // `animar: false`: a base já existia. Vê-la brotar do chão faria uma
+    // construção de semanas atrás parecer que acabou de acontecer.
+    for (const evento of mensagem.construcoes ?? []) this.aoConstruir({ ...evento, animar: false });
+
+    // `emBloco` — ver `aoTerraformar` em `main.js`. Aplicar uma a uma corre
+    // contra a geração de terreno que já está em curso.
+    for (const [planeta, lista] of mensagem.terreno ?? []) this.aoTerraformar?.(planeta, lista, true);
+
+    for (const jogador of mensagem.jogadores ?? []) {
+      this._garantirRemoto(jogador.id, jogador.nome);
+      // `estado` pode ser nulo: quem entrou e ainda não se moveu existe no
+      // sistema e precisa constar na lista, mesmo sem posição conhecida.
+      if (jogador.estado) this._atualizarRemoto(jogador.id, jogador.estado, true);
+    }
+  }
+
+  /**
+   * Manda uma linha de chat.
+   * @param {string} texto
+   * @param {'local'|'global'} escopo
+   */
+  falar(texto, escopo = 'local') {
+    if (!this.conectado) return false;
+    const limpo = String(texto).trim().slice(0, 200);
+    if (!limpo) return false;
+    this.socket.send(JSON.stringify({ type: 'chat', texto: limpo, escopo }));
+    return true;
   }
 
   /**
@@ -377,6 +463,11 @@ export class Multiplayer {
     }
   }
 
+  /** Apaga todos os avatares remotos — usado ao trocar de sistema. */
+  _limparRemotos() {
+    for (const id of [...this.remotos.keys()]) this._remover(id);
+  }
+
   _remover(id) {
     const remoto = this.remotos.get(id);
     if (!remoto) return;
@@ -466,6 +557,20 @@ export class Multiplayer {
   terraformou(planeta, edicao) {
     if (!this.conectado) return;
     this.socket.send(JSON.stringify({ type: 'terreno', planeta, edicao }));
+  }
+
+  /**
+   * Reivindica a descoberta de um sistema.
+   *
+   * Manda sempre, sem consultar o catálogo local antes: quem decide é o
+   * servidor (ver o caso `descobrir` em `mp-server.js`), que é o único lado com
+   * a lista completa e atual. O cliente só marca o sistema quando a confirmação
+   * volta — assim o nome exibido é sempre o que o servidor gravou, e não uma
+   * suposição que pode contradizer a de outro jogador.
+   */
+  descobriu(endereco, nome) {
+    if (!this.conectado) return;
+    this.socket.send(JSON.stringify({ type: 'descobrir', endereco, nome }));
   }
 
   /** Avisa a sala de que um prop foi colhido aqui. */

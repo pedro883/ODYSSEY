@@ -42,6 +42,7 @@ import { cloudQuality } from './world/Clouds.js';
 import { audio } from './audio/AudioEngine.js';
 import { FloatingOrigin } from './core/FloatingOrigin.js';
 import { Multiplayer } from './net/Multiplayer.js';
+import { Weather, CLIMAS } from './world/Weather.js';
 
 /* ========================================================================== */
 /* Seed                                                                       */
@@ -50,7 +51,17 @@ import { Multiplayer } from './net/Multiplayer.js';
 // `?seed=12345` na URL reproduz exatamente o mesmo sistema estelar. Todo o
 // universo desta PoC cabe nesse inteiro — é o que torna "infinito" viável.
 const params = new URLSearchParams(location.search);
-const SEED = params.has('seed')
+/**
+ * O jogador ESCOLHEU este sistema?
+ *
+ * Com a sala dividida em canais por sistema, seeds diferentes deixaram de ser
+ * um conflito e passaram a ser lugares diferentes da galáxia. Quem abre o jogo
+ * sem escolher nada continua caindo junto de quem já está na sala (é o que faz
+ * "entrar com um amigo" funcionar sem combinar número nenhum); quem chega com
+ * `?seed=` quer aquele sistema, e o servidor respeita. Ver `_alinharSeed`.
+ */
+const SEED_EXPLICITO = params.has('seed');
+const SEED = SEED_EXPLICITO
   ? Number(params.get('seed')) >>> 0
   : (Math.random() * 0xffffffff) >>> 0;
 
@@ -113,6 +124,16 @@ function lerNome() {
   return null;
 }
 
+/**
+ * O nome com que este piloto assina — inclusive fora da sala.
+ *
+ * É o mesmo campo que vai no `join`, e por isso o crédito de uma descoberta
+ * feita offline bate com o que apareceria online.
+ */
+function nomeDoPiloto() {
+  return pilotInput.value.trim() || 'Piloto';
+}
+
 // A crítica some assim que a pessoa começa a corrigir: manter o vermelho
 // enquanto ela digita é acusá-la de um erro que ela já está consertando.
 pilotPass.addEventListener('input', () => pilotPass.classList.remove('invalid'));
@@ -170,6 +191,7 @@ const playerController = new PlayerController(canvas);
 const warpLines = new WarpLines(engine.scene);
 
 const gameState = new GameState(engine, starSystem);
+const weather = new Weather(engine.scene, gameState);
 const inventory = new Inventory();
 const discovery = new Discovery();
 const scanner = new Scanner(engine.scene);
@@ -383,6 +405,7 @@ const multiplayer = enderecoSala
       starSystem,
       url: enderecoSala,
       seed: SEED,
+      seedExplicito: SEED_EXPLICITO,
       aviso: (texto) => hud.notify(texto, 2.6),
       // A sala é a dona das construções: tudo que chega — de outro jogador ou
       // do banco, no momento de entrar — passa pelo mesmo `aplicar`.
@@ -413,6 +436,26 @@ const multiplayer = enderecoSala
         if (!planeta) return;
         for (const id of ids) planeta.removerEdicao(id);
       },
+      /**
+       * Uma descoberta — do catálogo que chega ao entrar ou de alguém que
+       * acabou de chegar num sistema inédito.
+       *
+       * O aviso só sai para descobertas NOVAS de outra pessoa: repetir as
+       * centenas do catálogo inicial encheria a tela no primeiro segundo de
+       * sala, e anunciar a própria descoberta duplicaria o texto que
+       * `reivindicarDescoberta` já mostra.
+       */
+      aoChat: (linha) => hud.escreverNoChat(linha),
+      aoDescobrir: (registro, inicial = false) => {
+        if (!galaxyMap.registrarDescoberta(registro)) return;
+        if (inicial) return;
+        hud.notify(
+          registro.descobridor === nomeDoPiloto()
+            ? `SISTEMA INÉDITO: ${registro.nome.toUpperCase()} É SEU`
+            : `${registro.descobridor.toUpperCase()} DESCOBRIU ${registro.nome.toUpperCase()}`,
+          3.4
+        );
+      },
     })
   : null;
 multiplayer?.conectar();
@@ -428,8 +471,14 @@ shipController.updateCamera(engine.camera, 1);
  * `Object3D.lookAt()` NÃO serve: para objetos que não são câmera/luz ele
  * alinha o +Z, o oposto da convenção usada pela nave.
  */
-function orientTowards(object, target) {
-  const matrix = new THREE.Matrix4().lookAt(object.position, target, object.up);
+/**
+ * Aponta o nariz do objeto (−Z) para um ponto.
+ *
+ * `cima` é opcional e existe para quem tem uma referência de rolagem melhor que
+ * o Y do mundo — perto de um planeta, o "para cima" que importa é o radial.
+ */
+function orientTowards(object, target, cima) {
+  const matrix = new THREE.Matrix4().lookAt(object.position, target, cima ?? object.up);
   object.quaternion.setFromRotationMatrix(matrix);
 }
 
@@ -659,8 +708,33 @@ function board() {
   hud.notify('A BORDO', 2.0);
 }
 
+// A caixa de chat é ligada uma vez; o envio devolve `false` sem sala, e aí a
+// própria interface avisa em vez de engolir a linha.
+hud.ligarChat((texto, alcance) => multiplayer?.falar(texto, alcance) ?? false);
+
 window.addEventListener('keydown', (event) => {
   if (!started || event.ctrlKey || event.metaKey || event.altKey) return;
+
+  // -------------------------------------------------------------------------
+  // O CHAT VEM ANTES DE TUDO, INCLUSIVE DO MAPA.
+  //
+  // Com a caixa aberta, o teclado inteiro pertence a ela: `N` precisa escrever
+  // um "n", não abrir o mapa galáctico. O `keydown` do input já para a
+  // propagação, então chegar aqui com o chat aberto significa que o foco se
+  // perdeu — e nesse caso a saída segura é fechar.
+  // -------------------------------------------------------------------------
+  if (hud.chat.aberto) {
+    if (document.activeElement !== hud.chat.input) hud.fecharChat();
+    return;
+  }
+
+  // Enter abre a linha de digitação. Fica fora do mapa e do painel: conversar
+  // é possível a qualquer momento, menos com outra caixa de texto na tela.
+  if (event.code === 'Enter' && !galaxyMap.aberto && !painelAberto) {
+    event.preventDefault();
+    hud.abrirChat();
+    return;
+  }
 
   // -------------------------------------------------------------------------
   // O MAPA VEM ANTES DE TUDO.
@@ -686,6 +760,7 @@ window.addEventListener('keydown', (event) => {
     // Colchetes trocam de galáxia: navegação de catálogo, sem colisão com voo.
     else if (event.code === 'BracketLeft') galaxyMap.trocarGalaxia(-1);
     else if (event.code === 'BracketRight') galaxyMap.trocarGalaxia(1);
+    else eixosDoMapa(event.code, 1);
     return;
   }
 
@@ -753,6 +828,37 @@ window.addEventListener('keydown', (event) => {
   }
 });
 
+/**
+ * Teclas de voo DENTRO do mapa.
+ *
+ * As mesmas do voo normal — WASD para o plano, R/F para subir e descer — porque
+ * são as que a mão já está usando quando o mapa abre. `mover` no `GalaxyMap`
+ * traduz os eixos para o referencial da câmera.
+ *
+ * @param {string} codigo `event.code`
+ * @param {0|1} valor 1 ao pressionar, 0 ao soltar
+ * @returns {boolean} se a tecla era de movimento
+ */
+function eixosDoMapa(codigo, valor) {
+  const e = galaxyMap.eixos;
+  switch (codigo) {
+    case 'KeyW': case 'ArrowUp': e.frente = valor; return true;
+    case 'KeyS': case 'ArrowDown': e.frente = -valor; return true;
+    case 'KeyD': case 'ArrowRight': e.lado = valor; return true;
+    case 'KeyA': case 'ArrowLeft': e.lado = -valor; return true;
+    // Subir e descer NÃO usam `F`: no mapa essa tecla já centraliza no destino,
+    // e a checagem dela vem antes desta função. Duas ações na mesma tecla é
+    // exatamente o que o resto do teclado deste arquivo evita.
+    case 'KeyR': case 'Space': e.cima = valor; return true;
+    case 'KeyQ': case 'ShiftLeft': e.cima = -valor; return true;
+    default: return false;
+  }
+}
+
+window.addEventListener('keyup', (event) => {
+  if (galaxyMap.aberto) eixosDoMapa(event.code, 0);
+});
+
 /* ========================================================================== */
 /* Multiferramenta                                                            */
 /* ========================================================================== */
@@ -777,17 +883,24 @@ const botao = { esquerdo: false, direito: false };
  * ponteiro e fechá-lo o retoma.
  */
 let arrastando = false;
+let deslizando = false;
 
 canvas.addEventListener('mousedown', (event) => {
   if (galaxyMap.aberto) {
-    if (event.button === 0) {
-      const alvo = escolherNoMapa(event);
-      // Clicar numa estrela seleciona; clicar no vazio começa a girar a câmera.
-      if (!alvo) arrastando = true;
-      else audio.ui(true);
-    } else if (event.button === 2) {
-      arrastando = true;
-    }
+    // -----------------------------------------------------------------------
+    // ARRASTAR SEMPRE GIRA — mesmo começando em cima de uma estrela.
+    //
+    // Antes o botão esquerdo só girava se o clique caísse no VAZIO; sobre uma
+    // estrela ele selecionava e a câmera ficava presa. Num campo com milhares
+    // de pontos, encontrar vazio para começar a girar é uma caça, e o mapa dava
+    // a impressão de travar aleatoriamente.
+    //
+    // Perder a seleção por clique não custa nada: quem seleciona é o cursor ao
+    // passar por cima (ver `mousemove`), então a estrela já está escolhida
+    // antes de o botão descer.
+    // -----------------------------------------------------------------------
+    if (event.button === 0) arrastando = true;
+    else if (event.button === 2) deslizando = true;
     return;
   }
 
@@ -806,6 +919,7 @@ canvas.addEventListener('mousedown', (event) => {
 
 window.addEventListener('mouseup', (event) => {
   arrastando = false;
+  deslizando = false;
   if (event.button === 0) botao.esquerdo = false;
   if (event.button === 2) botao.direito = false;
   if (!botao.esquerdo && !botao.direito) terraform.soltar();
@@ -822,8 +936,29 @@ function escolherNoMapa(event) {
 
 canvas.addEventListener('mousemove', (event) => {
   if (!galaxyMap.aberto) return;
+
+  // -------------------------------------------------------------------------
+  // O ESTADO DE ARRASTO É RECONFERIDO PELO PRÓPRIO EVENTO.
+  //
+  // `event.buttons` diz quais botões estão pressionados AGORA. A flag sozinha
+  // não bastava: basta um `mouseup` perdido — soltar o botão fora da janela,
+  // trocar de aba no meio do arrasto, um menu do sistema roubando o foco — para
+  // ela ficar presa em `true`. E `true` aqui significa "o cursor está girando a
+  // câmera", ou seja, o hover para de rodar e o mapa fica TRAVADO na última
+  // estrela escolhida, sem nenhuma pista do que aconteceu.
+  // -------------------------------------------------------------------------
+  if ((event.buttons & 1) === 0) arrastando = false;
+  if ((event.buttons & 2) === 0) deslizando = false;
+
   if (arrastando) galaxyMap.orbitar(event.movementX, event.movementY);
-  else escolherNoMapa(event);
+  else if (deslizando) galaxyMap.deslocar(event.movementX, event.movementY);
+  else {
+    const antes = galaxyMap.selecionado;
+    const alvo = escolherNoMapa(event);
+    // Um blip só quando o cursor ENTRA numa estrela nova. Sem a comparação, o
+    // som dispararia a cada frame do movimento sobre a mesma estrela.
+    if (alvo && alvo !== antes) audio.ui(true);
+  }
 });
 
 canvas.addEventListener('dblclick', (event) => {
@@ -836,7 +971,9 @@ canvas.addEventListener('dblclick', (event) => {
 // Sem isto, o botão direito abre o menu do navegador por cima do jogo — e o
 // pointer lock é perdido junto.
 canvas.addEventListener('contextmenu', (event) => {
-  if (started && mode === 'FOOT') event.preventDefault();
+  // No mapa o botão direito arrasta o campo de estrelas; sem isto, cada arrasto
+  // termina com o menu do navegador aberto por cima da galáxia.
+  if (galaxyMap.aberto || (started && mode === 'FOOT')) event.preventDefault();
 });
 
 canvas.addEventListener(
@@ -905,17 +1042,97 @@ function alternarMapa() {
   galaxyMap.aberto = true;
   galaxyMap.redimensionar(window.innerWidth / window.innerHeight);
   galaxyMap.centralizarNoAtual();
+  // Sem deslize na abertura: o mapa já nasce enquadrado no sistema atual. O
+  // amortecimento existe para os movimentos que o jogador COMANDA — animar
+  // também a entrada só atrasaria a primeira leitura da tela.
+  galaxyMap.assentar();
   hud.mostrarMapa(true);
   document.exitPointerLock?.();
+
+  // ---------------------------------------------------------------------
+  // O MUNDO PARA ENQUANTO O MAPA ESTÁ ABERTO.
+  //
+  // Antes o jogo continuava rodando por baixo: a nave seguia em voo livre
+  // (com o acelerador exatamente como foi deixado), a geração de terreno
+  // continuava consumindo CPU e o motor continuava roncando sobre uma tela
+  // onde não há nave nenhuma. Nada disso é observável durante o mapa — a
+  // cena do mundo sequer é desenhada —, então tudo o que sobrava era o
+  // custo, e a surpresa desagradável de fechar o mapa noutro lugar.
+  //
+  // O motor é silenciado explicitamente porque as camadas contínuas do
+  // áudio são osciladores que nunca param: sem zerar o ganho, apenas deixar
+  // de atualizá-los congela o último som tocando para sempre.
+  // ---------------------------------------------------------------------
+  shipController.throttle = 0;
+  audio.silenciarContinuos();
   audio.ui(true);
 }
 
 function fecharMapa() {
   if (!galaxyMap.aberto) return;
   galaxyMap.aberto = false;
+  galaxyMap.eixos.frente = galaxyMap.eixos.lado = galaxyMap.eixos.cima = 0;
   hud.mostrarMapa(false);
   audio.ui(false);
   if (started && !painelAberto) requestPointerLock();
+}
+
+/* ========================================================================== */
+/* Descoberta de sistemas                                                     */
+/* ========================================================================== */
+
+/** Endereço já reivindicado — evita remandar o pedido a cada frame. */
+let sistemaReivindicado = null;
+
+/**
+ * Reivindica o sistema atual para quem está pilotando, se ele não tiver dono.
+ *
+ * ---------------------------------------------------------------------------
+ * POR QUE ISTO VIVE NO LAÇO E NÃO NA CHEGADA
+ * ---------------------------------------------------------------------------
+ * A tentação é chamar isto uma vez, logo depois de `situar`. Não funciona, e a
+ * falha é silenciosa: no boot, o jogo entra no sistema ANTES de a sala
+ * responder, então a reivindicação sairia sem o catálogo em mãos — e o cliente
+ * marcaria como inédito um sistema que outra pessoa descobriu no mês passado.
+ * Esperar a conexão numa chamada única traria o problema oposto: quem joga sem
+ * servidor nunca registraria nada.
+ *
+ * Uma tentativa por frame, guardada por um endereço já resolvido, cobre os dois
+ * casos sem nenhuma coordenação: assim que houver resposta (ou a certeza de que
+ * não há sala), o registro acontece. O custo é uma busca em `Map` por frame, e
+ * só enquanto o sistema atual ainda não foi resolvido.
+ */
+function tentarReivindicarSistema() {
+  const sistema = galaxyMap.atual;
+  if (!sistema) return;
+
+  const endereco = galaxyMap.chaveDe(sistema);
+  if (sistemaReivindicado === endereco) return;
+
+  // Já tem dono: nada a reivindicar, e o assunto se encerra para este sistema.
+  if (galaxyMap.descobertas.has(endereco)) {
+    sistemaReivindicado = endereco;
+    return;
+  }
+
+  // Ainda negociando com a sala: o catálogo pode estar a caminho.
+  if (multiplayer && multiplayer.estado === 'conectando') return;
+
+  const nome = nomeDoSistema(sistema);
+  sistemaReivindicado = endereco;
+
+  if (multiplayer?.conectado) {
+    // Quem decide é o servidor. A marca no mapa só aparece quando a
+    // confirmação volta — inclusive a recusa, que chega como a descoberta de
+    // outra pessoa.
+    multiplayer.descobriu(endereco, nome);
+    return;
+  }
+
+  // Sem sala: o registro é local e o crédito é de quem está jogando.
+  if (galaxyMap.registrarDescoberta({ endereco, nome, descobridor: nomeDoPiloto(), quando: new Date().toISOString() })) {
+    hud.notify(`SISTEMA INÉDITO: ${nome.toUpperCase()} É SEU`, 3.4);
+  }
 }
 
 /* ========================================================================== */
@@ -930,18 +1147,52 @@ const CHUNKS_PARA_CHEGAR = 24;
  * olhando para ele. Chegar dentro do planeta seria o resultado de simplesmente
  * manter a posição anterior — que no sistema novo significa outro lugar.
  */
+const _alvoChegada = new THREE.Vector3();
+
 function posicionarNaChegada() {
   const destino = starSystem.planets[0];
-  const direcao = new THREE.Vector3(0.35, 0.42, 1).normalize();
+  const radial = new THREE.Vector3(0.35, 0.42, 1).normalize();
   ship.group.position
     .copy(destino.group.position)
-    .addScaledVector(direcao, destino.radius * 3.2);
-  orientTowards(ship.group, destino.group.position);
+    .addScaledVector(radial, destino.radius * 3.2);
+
+  // ---------------------------------------------------------------------------
+  // A ATITUDE DA CHEGADA É MONTADA À MÃO.
+  //
+  // Antes era `orientTowards(nave, centro do planeta)`, e isso põe o nariz
+  // apontado EXATAMENTE para o centro — a nave materializa mergulhando. Pior: a
+  // referência de rolagem era o Y do MUNDO, que não tem relação nenhuma com o
+  // planeta à frente, então a nave chegava girada em relação ao horizonte que o
+  // jogador está vendo. Os dois efeitos juntos são o que se lê como "entrar de
+  // cabeça para baixo".
+  //
+  // A montagem abaixo dá as duas coisas que faltavam: o planeta ADIANTE e
+  // ABAIXO (não sob os pés), e um "para cima" que é o radial do ponto de
+  // chegada — o mesmo que o jogador vai usar como referência ao descer.
+  // ---------------------------------------------------------------------------
+  const lado = new THREE.Vector3().crossVectors(radial, new THREE.Vector3(0, 1, 0));
+  // Radial paralelo ao Y do mundo deixaria o produto vetorial nulo e a base
+  // inteira degenerada. Não acontece com a constante atual, mas o dia em que
+  // alguém mudar o vetor de chegada não deveria ser um dia de depuração.
+  if (lado.lengthSq() < 1e-6) lado.crossVectors(radial, new THREE.Vector3(1, 0, 0));
+  lado.normalize();
+
+  const tangente = new THREE.Vector3().crossVectors(lado, radial).normalize();
+  // 0.85 do radial contra 1 da tangente: cerca de 40° de mergulho. O planeta
+  // ocupa a metade de baixo do quadro, que é o enquadramento de chegada.
+  const nariz = tangente.clone().addScaledVector(radial, -0.85).normalize();
+  const cima = radial.clone().addScaledVector(nariz, -radial.dot(nariz)).normalize();
+
+  orientTowards(ship.group, _alvoChegada.copy(ship.group.position).add(nariz), cima);
+
   shipController.velocity.set(0, 0, 0);
   shipController.throttle = 0;
   playerController.enabled = false;
   mode = 'SHIP';
   activePlanet = destino;
+
+  // A câmera é teletransportada junto. Ver `ShipController.assentarCamera`.
+  shipController.assentarCamera(engine.camera);
 }
 
 /** O salto é permitido? Devolve o motivo quando não. */
@@ -986,9 +1237,19 @@ function saltarPara(sistema) {
       // sobre um planeta que nada tem a ver com ela.
       build.esquecerTudo();
 
+      // TROCA DE CANAL. Precisa acontecer antes de o primeiro pacote de posição
+      // sair daqui: um `state` enviado com o universo novo e o canal antigo
+      // poria este avatar dentro do planeta de quem ficou para trás. O servidor
+      // responde com o mundo do sistema de destino — bases, colheitas,
+      // escavações e quem já está lá.
+      multiplayer?.mudarSistema(sistema.seed);
+
       galaxiaAtual = sistema.galaxia;
       galaxyMap.situar(sistema.galaxia, sistema.seed, { x: sistema.vx, y: sistema.vy, z: sistema.vz });
-      hud.notify(`SISTEMA ${nomeDoSistema(sistema.seed).toUpperCase()}`, 3.2);
+      hud.notify(`SISTEMA ${nomeDoSistema(sistema).toUpperCase()}`, 3.2);
+      // Sistema novo, reivindicação nova. Sem isto, o endereço resolvido do
+      // sistema anterior continuaria valendo e a chegada nunca seria registrada.
+      sistemaReivindicado = null;
       if (contaAtiva) salvarProgresso();
     },
     // A viagem só termina quando há terreno para chegar em cima. Ver o
@@ -1395,6 +1656,29 @@ let biomeTimer = 0;
 const BIOME_INTERVAL = 0.25;
 
 engine.start((dt, elapsed) => {
+  // 0. Mapa galáctico: o mundo fica congelado ------------------------------
+  //
+  // O mapa não é uma sobreposição, é um MODO. A cena do mundo nem chega a ser
+  // desenhada (ver `Engine.render`), então tudo o que o resto deste laço faria
+  // — física, LOD, geração de terreno, fauna, áudio — seria trabalho invisível.
+  // Pior que invisível: a nave continuava voando, e fechar o mapa devolvia o
+  // jogador a um lugar diferente daquele de onde ele saiu.
+  //
+  // O salto é a única coisa que precisa continuar rodando, porque ele começa
+  // com o mapa ainda aberto e é ele que o fecha.
+  if (galaxyMap.aberto) {
+    galaxyMap.atualizar(dt);
+    warp.atualizar(dt);
+    hud.atualizarMapa({
+      ficha: galaxyMap.fichaSelecionada(),
+      galaxia: GALAXIAS[galaxyMap.galaxia]?.nome ?? '—',
+      visitados: galaxyMap.visitados.size,
+      alcance: ALCANCE_SALTO,
+      estrelas: galaxyMap._lista.length,
+    });
+    return;
+  }
+
   // 1. Sol deste frame (dia/noite) ---------------------------------------
   starSystem.updateBackdrop(engine.camera, elapsed, gameState.atmosphere);
 
@@ -1469,6 +1753,14 @@ engine.start((dt, elapsed) => {
   faunaPlanet = activePlanet;
   if (started) activePlanet.fauna.update(dt, _reference, gameState.altitude);
 
+  // O clima vem depois da câmera e do rebase: as partículas vivem num grupo
+  // ancorado na posição de CENA da câmera deste frame, e usá-la antes do
+  // rebase deixaria a chuva um passo atrás a cada recentragem.
+  weather.update(dt, activePlanet, _reference, engine.camera.position);
+  gameState.nevoaExtra = weather.nevoaExtra;
+  // Só a pé: dentro da nave a cabine é seca (e a nave não mergulha).
+  gameState.submerso = mode === 'FOOT' ? playerController.submerso : 0;
+
   updateTools(dt);
   scanner.updatePulse(dt);
   // Platôs pendentes e animação de surgimento das peças. Fora do `updateTools`
@@ -1476,11 +1768,10 @@ engine.start((dt, elapsed) => {
   // construtor guardado, porque outro jogador pode estar construindo nela.
   build.atualizar(dt);
 
-  galaxyMap.atualizar(dt);
   warp.atualizar(dt);
 
   viewModel.atualizar(dt, {
-    visivel: started && mode === 'FOOT' && !painelAberto && !galaxyMap.aberto && !warp.ativo,
+    visivel: started && mode === 'FOOT' && !painelAberto && !warp.ativo,
     // A cena de sobreposição precisa continuar sendo desenhada durante o salto:
     // é nela que o túnel vive.
     cenaAtiva: warp.ativo,
@@ -1504,6 +1795,9 @@ engine.start((dt, elapsed) => {
   // Salvamento periódico. 20 s é o compromisso: perder até 20 segundos de
   // coleta é irrelevante, e uma gravação por frame transformaria o banco no
   // gargalo de um jogo que roda a 60 Hz. O `beforeunload` cobre a saída limpa.
+  hud.atualizarChat(dt);
+  if (started) tentarReivindicarSistema();
+
   if (started && contaAtiva) {
     salvarTimer -= dt;
     if (salvarTimer <= 0) {
@@ -1544,6 +1838,8 @@ engine.start((dt, elapsed) => {
       onFoot: mode === 'FOOT',
       mining: botao.esquerdo && ferramentaAtual().id === 'multiferramenta' && !!scanner.target,
       jetpack: playerController.jetpackActive,
+      chuva: weather.intensidade,
+      climaAreia: weather.clima === CLIMAS.AREIA,
     });
   }
 
@@ -1595,6 +1891,9 @@ engine.start((dt, elapsed) => {
     planetName: activePlanet.name,
     planetClass: activePlanet.config.type,
     biome: biomeLabel,
+    // Fora da atmosfera o clima não se aplica; mostrar "Limpo" no vácuo
+    // sugeriria que existe tempo lá fora.
+    clima: gameState.atmosphere > 0.5 ? weather.clima : '—',
     fauna: activePlanet.fauna.count,
     faunaEspecies: activePlanet.fauna.species.length,
     faunaAtiva: activePlanet.fauna.enabled,
@@ -1641,19 +1940,9 @@ engine.start((dt, elapsed) => {
       : null
   );
 
-  hud.updateHotbar(
-    mode === 'FOOT' && started && !galaxyMap.aberto ? { ferramentas: FERRAMENTAS, atual: ferramenta } : null
-  );
+  // Sem checar o mapa: com ele aberto este laço já retornou lá em cima.
+  hud.updateHotbar(mode === 'FOOT' && started ? { ferramentas: FERRAMENTAS, atual: ferramenta } : null);
   if (painelAberto) hud.atualizarPainel({ inventario: inventory, build, recursos: RESOURCES });
-  if (galaxyMap.aberto) {
-    hud.atualizarMapa({
-      ficha: galaxyMap.fichaSelecionada(),
-      galaxia: GALAXIAS[galaxyMap.galaxia]?.nome ?? '—',
-      visitados: galaxyMap.visitados.size,
-      alcance: ALCANCE_SALTO,
-      estrelas: galaxyMap._lista.length,
-    });
-  }
 
   // Prompt contextual
   if (!started) hud.setPrompt(null);
@@ -1682,7 +1971,7 @@ if (!engine.isWebGL2) {
 window.__nms = {
   engine, starSystem, ship, shipController, playerController,
   gameState, inventory, discovery, scanner, seed: SEED, cloudQuality, audio,
-  floatingOrigin, multiplayer, build, terraform, viewModel, galaxyMap, warp,
+  floatingOrigin, multiplayer, build, terraform, viewModel, galaxyMap, warp, weather,
   saltarPara, alternarMapa,
   get ferramenta() { return ferramentaAtual(); },
   equipar,

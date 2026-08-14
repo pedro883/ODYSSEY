@@ -1,6 +1,50 @@
 import { defineConfig } from 'vite';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+/**
+ * Recebe capturas de tela do jogo e as grava em `capturas/`.
+ *
+ * SÓ EM DESENVOLVIMENTO (`apply: 'serve'`), e existe por um motivo prático: o
+ * canvas WebGL não pode ser lido de fora do navegador, então avaliar uma
+ * mudança de shader exigia descrever a tela em palavras ou copiar a imagem em
+ * base64 pelo console — caro e ruim. Com este endpoint, a página manda o PNG e
+ * o arquivo aparece no projeto, onde qualquer ferramenta o abre.
+ *
+ * Da página:
+ *   fetch('/__captura/nome.jpg', { method: 'POST', body: <dataURL ou base64> })
+ */
+function plugincapturas() {
+  return {
+    name: 'nms-capturas',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use('/__captura', (req, res, next) => {
+        if (req.method !== 'POST') return next();
+        let corpo = '';
+        req.on('data', (p) => (corpo += p));
+        req.on('end', () => {
+          try {
+            const nome = (req.url || '/captura.jpg').replace(/[^\w.-]/g, '').slice(0, 64) || 'captura.jpg';
+            const base64 = corpo.includes(',') ? corpo.slice(corpo.indexOf(',') + 1) : corpo;
+            const pasta = resolve(process.cwd(), 'capturas');
+            mkdirSync(pasta, { recursive: true });
+            writeFileSync(resolve(pasta, nome), Buffer.from(base64, 'base64'));
+            res.statusCode = 200;
+            res.end(nome);
+          } catch (erro) {
+            res.statusCode = 500;
+            res.end(String(erro));
+          }
+        });
+      });
+    },
+  };
+}
 
 export default defineConfig({
+  plugins: [plugincapturas()],
+
   /**
    * Caminhos RELATIVOS nos assets gerados.
    *

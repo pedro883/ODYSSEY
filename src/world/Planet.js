@@ -16,6 +16,7 @@ import { QuadTreeNode } from './QuadTreeNode.js';
 import { PropScatter } from './PropScatter.js';
 import { Fauna } from './Fauna.js';
 import { createAtmosphere } from '../shaders/AtmosphereShader.js';
+import { criarOceano } from '../shaders/OceanShader.js';
 import { Clouds } from './Clouds.js';
 import { CampoDeEdicoes } from '../shared/edits.js';
 
@@ -100,21 +101,11 @@ export class Planet {
     this.roots = CUBE_FACES.map((_, face) => new QuadTreeNode(this, face, 0, 0, 1, 0));
 
     // --- Oceano ------------------------------------------------------------
-    // Esfera simples no nível do mar. Barato e resolve 90% da leitura visual:
-    // o relevo abaixo de zero já foi gerado como fundo submarino.
+    // Casca no nível do mar com shader próprio: ondas, espuma na arrebentação e
+    // cor por profundidade amostrada do próprio relevo. Ver `OceanShader.js`.
     if (this.config.hasWater) {
-      const waterColor = new THREE.Color().fromArray(this.config.waterColor);
-      this.ocean = new THREE.Mesh(
-        new THREE.SphereGeometry(this.config.radius, 128, 96),
-        new THREE.MeshStandardMaterial({
-          color: waterColor,
-          transparent: true,
-          opacity: 0.85,
-          roughness: 0.06,
-          metalness: 0.15,
-        })
-      );
-      this.ocean.renderOrder = 1;
+      this.oceano = criarOceano(this.config, this.sampler.heightAt);
+      this.ocean = this.oceano.mesh;
       this.group.add(this.ocean);
     }
 
@@ -187,6 +178,9 @@ export class Planet {
     this.atmosphereUniforms.uSunDirection.value.copy(sunDirection);
     this.setAtmosphereSide(cameraLocal.lengthSq() < this.atmosphereRadius * this.atmosphereRadius);
     this.clouds.update(cameraLocal, sunDirection, elapsed, true);
+    // A câmera vai em espaço LOCAL do planeta porque é nele que a casca do
+    // oceano vive — o shader compara com `position`, que é local por definição.
+    this.oceano?.atualizar(cameraLocal, sunDirection, elapsed);
   }
 
   /**
@@ -208,6 +202,10 @@ export class Planet {
     this.atmosphereUniforms.uSunDirection.value.copy(sunDirection);
     this.setAtmosphereSide(false);
     this.clouds.update(cameraLocal, sunDirection, elapsed, false);
+    // De longe as ondas não se distinguem, mas o sol e a câmera sim: sem esta
+    // linha o brilho especular do mar ficaria congelado na direção em que a
+    // nave estava quando saiu do planeta.
+    this.oceano?.atualizar(cameraLocal, sunDirection, elapsed);
   }
 
   /**
@@ -443,10 +441,7 @@ export class Planet {
 
     this.atmosphereMesh.geometry.dispose();
     this.atmosphereMesh.material.dispose();
-    if (this.ocean) {
-      this.ocean.geometry.dispose();
-      this.ocean.material.dispose();
-    }
+    this.oceano?.dispose();
     this.group.removeFromParent();
   }
 }

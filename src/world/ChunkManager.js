@@ -11,6 +11,7 @@
  */
 
 import * as THREE from 'three';
+import { aplicarDetalheDeSuperficie } from '../shaders/SurfaceDetail.js';
 
 /**
  * Chave estável de um chunk.
@@ -127,6 +128,7 @@ export class ChunkManager {
       roughness: 0.95,
       metalness: 0.0,
     });
+    aplicarDetalheDeSuperficie(this.material, config);
 
     this.nextId = 1;
     /** Pedidos enfileirados que ainda não foram para nenhum worker. */
@@ -168,16 +170,25 @@ export class ChunkManager {
   }
 
   /**
-   * Props só nos 3 níveis de LOD mais finos.
+   * Props nos 4 níveis de LOD mais finos.
    *
-   * Um a mais alcança bem mais longe (cada nível dobra o raio coberto) sem
-   * custo proporcional: a densidade por área é constante, então o total de
-   * instâncias cresce com a área realmente visível, não com a contagem de
-   * chunks. Menos que isso e a vegetação some num anel visível ao redor do
-   * jogador; mais, e instanciamos arbustos de meio pixel.
+   * Cada nível dobra o raio coberto sem custo proporcional: a densidade por
+   * área é constante, então o total de instâncias cresce com a área realmente
+   * visível, não com a contagem de chunks. Menos que isso e a vegetação some
+   * num anel visível ao redor do jogador; mais, e instanciamos arbustos de meio
+   * pixel (o nível 5 dobraria o custo do chunk para isso).
+   *
+   * ERAM TRÊS NÍVEIS, e o quarto só passou a fazer sentido depois que o
+   * espalhamento virou função do LUGAR (ver `scatterProps` no worker). Antes,
+   * cada nível gerava props DIFERENTES sobre o mesmo chão, então antecipar a
+   * geração só antecipava o embaralhamento. Agora o chunk grosso já traz a
+   * vegetação nas posições definitivas, e subdividir não muda nada na tela —
+   * o que o nível a mais compra é tempo: a mata começa a carregar a ~250
+   * unidades da superfície em vez de ~130, que é a diferença entre chegar num
+   * mundo já povoado e vê-lo brotar depois de pousar.
    */
   wantsProps(level) {
-    return level >= this.config.lod.maxLevel - 2;
+    return level >= this.config.lod.maxLevel - 3;
   }
 
   /**

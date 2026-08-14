@@ -43,7 +43,12 @@ import { Banco } from './db.js';
 
 const PORTA = Number(process.env.PORT ?? 5200);
 
-/** Seed do universo desta sala. `--seed=N` fixa; senão sorteia uma vez. */
+/**
+ * Sistema de ENTRADA da sala. `--seed=N` fixa; senão sorteia uma vez.
+ *
+ * Deixou de ser "o universo desta sala" e virou apenas o endereço padrão para
+ * quem chega sem escolher nenhum — ver o cabeçalho de `canalDe`.
+ */
 const argSeed = process.argv.find((a) => a.startsWith('--seed='));
 const SEED = argSeed ? Number(argSeed.split('=')[1]) >>> 0 : (Math.random() * 0xffffffff) >>> 0;
 
@@ -52,57 +57,120 @@ await banco.conectar();
 
 const servidor = new WebSocketServer({ port: PORTA });
 
-/** @type {Map<number, {id:number, nome:string, socket:object, estado:object}>} */
+/**
+ * Jogadores conectados. Cada um carrega o SEED do sistema em que está.
+ * @type {Map<number, {id:number, nome:string, socket:object, estado:object, seed:number}>}
+ */
 const jogadores = new Map();
 
-/**
- * Props já colhidos, por planeta.
- *
- * Chave: `planetaId:chaveDoChunk`, valor: Set de índices. É exatamente o
- * formato que o `PropScatter.harvested` usa do lado do cliente, então aplicar
- * o que chega é uma linha lá.
- * @type {Map<string, Set<number>>}
- */
-const colhidos = new Map();
+/* ==========================================================================
+   CANAIS: um sistema estelar, um mundo compartilhado
+   ==========================================================================
+
+   ---------------------------------------------------------------------------
+   POR QUE A SALA DEIXOU DE SER UM UNIVERSO SÓ
+   ---------------------------------------------------------------------------
+   Até aqui o servidor fixava um seed e obrigava todo mundo a ele: quem entrava
+   com outro tinha a página recarregada até coincidir. Isso mantinha o relay
+   simples e tornava o hiperimpulsor uma mentira — dois jogadores saltavam para
+   sistemas diferentes e continuavam se vendo, cada um voando dentro do planeta
+   que o outro não tinha.
+
+   Agora cada SISTEMA é um canal. Posição, colheita, construção e escavação só
+   circulam entre quem está no mesmo seed; saltar é trocar de canal. Encontrar
+   alguém deixa de ser o padrão e passa a ser o que era para ser: coincidência
+   de estarem no mesmo lugar da galáxia.
+
+   ---------------------------------------------------------------------------
+   O BANCO JÁ ESTAVA PRONTO PARA ISTO
+   ---------------------------------------------------------------------------
+   `colhido`, `construcao` e `terreno` sempre tiveram `seed` na chave primária —
+   o esquema modelava sistemas separados desde o início, e era só o servidor que
+   carregava um deles e ignorava o resto. Por isso esta mudança não tem migração
+   nenhuma: o que muda é QUANDO cada conjunto é lido.
+
+   Um canal é carregado do banco na primeira vez que alguém entra nele, e não no
+   boot: um servidor com cem sistemas visitados não tem por que ler os cem para
+   servir o jogador que está em um.
+   ========================================================================== */
+
+/** @type {Map<number, object>} seed -> canal */
+const canais = new Map();
+
+function canalDe(seed) {
+  const chave = seed >>> 0;
+  let canal = canais.get(chave);
+  if (!canal) {
+    canais.set(chave, (canal = {
+      seed: chave,
+      /**
+       * Props colhidos. Chave `planetaId:chaveDoChunk`, valor Set de índices —
+       * exatamente o formato que o `PropScatter.harvested` usa no cliente.
+       * @type {Map<string, Set<number>>}
+       */
+      colhidos: new Map(),
+      /** Peças por slot (`base:cx,cy,cz,face`). @type {Map<string, object>} */
+      construcoes: new Map(),
+      /**
+       * Referencial de cada base, à parte das peças: o `frame` só viaja no
+       * PRIMEIRO evento de uma base, e guardá-lo aqui é o que permite demolir
+       * essa peça sem deixar a base órfã para quem entrar depois.
+       * @type {Map<string, object>}
+       */
+      frames: new Map(),
+      /**
+       * Escavações por planeta. `planetaId -> (id -> edicao)`: o cliente
+       * REENVIA a mesma edição enquanto cava, com a profundidade crescendo, e
+       * o último valor vence — sem isso um buraco vira uma pilha de crateras.
+       * @type {Map<number, Map<string, object>>}
+       */
+      terreno: new Map(),
+      /** Ids dos jogadores presentes. @type {Set<number>} */
+      presentes: new Set(),
+      /** Promessa da carga do banco, ou `true` quando já terminou. */
+      pronto: null,
+    }));
+  }
+  return canal;
+}
 
 /**
- * Peças construídas, por slot.
- *
- * Chave: `base:cx,cy,cz,face` — a mesma que o cliente usa, para que aplicar o
- * que chega seja um `set` e um `delete`.
- * @type {Map<string, object>}
+ * Lê do banco o que este sistema guarda. Idempotente e com uma promessa só:
+ * dois jogadores entrando juntos num canal frio não podem disparar duas cargas.
  */
-const construcoes = new Map();
+function prepararCanal(canal) {
+  if (canal.pronto) return canal.pronto;
+  if (!banco.disponivel) return (canal.pronto = Promise.resolve());
 
-/**
- * Referencial de cada base, à parte das peças.
- *
- * Existe porque o `frame` só viaja no PRIMEIRO evento de uma base — depois
- * disso ele é redundante. Guardá-lo separado é o que permite demolir essa
- * primeira peça sem que a base fique órfã: quem entrar depois recebe todos os
- * eventos já com o referencial injetado de volta.
- * @type {Map<string, object>}
- */
-const frames = new Map();
+  canal.pronto = (async () => {
+    const guardado = await banco.carregarColhidos(canal.seed);
+    for (const [chave, indices] of guardado) canal.colhidos.set(chave, indices);
+
+    for (const evento of await banco.carregarConstrucoes(canal.seed)) {
+      canal.construcoes.set(chaveDaPeca(evento), evento);
+      if (evento.frame) canal.frames.set(evento.base, evento.frame);
+    }
+
+    let totalTerreno = 0;
+    for (const edicao of await banco.carregarTerreno(canal.seed)) {
+      terrenoDoPlaneta(canal, edicao.planeta).set(edicao.id, edicao.dados);
+      totalTerreno++;
+    }
+
+    const props = [...canal.colhidos.values()].reduce((s, c) => s + c.size, 0);
+    console.log(
+      `[db] sistema ${canal.seed}: ${props} props colhidos, ` +
+      `${canal.construcoes.size} peças, ${totalTerreno} escavações`
+    );
+  })().catch((erro) => console.error('[db] falha ao carregar sistema:', erro.message));
+
+  return canal.pronto;
+}
 
 /** Chave de slot de uma peça. */
 function chaveDaPeca(evento) {
   return `${evento.base}:${evento.cel[0]},${evento.cel[1]},${evento.cel[2]},${evento.face}`;
 }
-
-/**
- * Escavações de terreno, por planeta.
- *
- * `planetaId -> (idDaEdicao -> edicao)`. Um `Map` por id, e não uma lista,
- * porque o cliente REENVIA a mesma edição enquanto cava, com a profundidade
- * crescendo — o último valor vence e o buraco não vira uma pilha de cem
- * crateras sobrepostas.
- *
- * O platô sob uma base NÃO entra aqui: ele é função pura das peças dela e cada
- * cliente o recalcula sozinho (ver `BuildSystem._aplainar`).
- * @type {Map<number, Map<string, object>>}
- */
-const terreno = new Map();
 
 /**
  * Teto de escavações guardadas por planeta.
@@ -128,9 +196,9 @@ const terreno = new Map();
  */
 const MAX_EDICOES_POR_PLANETA = 400;
 
-function terrenoDoPlaneta(planetaId) {
-  let mapa = terreno.get(planetaId);
-  if (!mapa) terreno.set(planetaId, (mapa = new Map()));
+function terrenoDoPlaneta(canal, planetaId) {
+  let mapa = canal.terreno.get(planetaId);
+  if (!mapa) canal.terreno.set(planetaId, (mapa = new Map()));
   return mapa;
 }
 
@@ -140,8 +208,8 @@ function terrenoDoPlaneta(planetaId) {
  * `Map` preserva ordem de inserção, então a primeira chave é sempre a mais
  * antiga — o mesmo truque do cache LRU de chunks no cliente.
  */
-function podarTerreno(planetaId) {
-  const mapa = terrenoDoPlaneta(planetaId);
+function podarTerreno(canal, planetaId) {
+  const mapa = terrenoDoPlaneta(canal, planetaId);
   const removidos = [];
   while (mapa.size > MAX_EDICOES_POR_PLANETA) {
     const maisAntiga = mapa.keys().next().value;
@@ -151,36 +219,74 @@ function podarTerreno(planetaId) {
   return removidos;
 }
 
-/** Serializa as escavações no formato que o `welcome` carrega. */
-function terrenoParaLista() {
+/**
+ * Sistemas já descobertos, por endereço.
+ *
+ * NÃO é por universo, ao contrário de tudo o mais nesta sala. O endereço de um
+ * sistema identifica um lugar na galáxia, que é a mesma em qualquer partida —
+ * então a descoberta acompanha o lugar, não o seed da sala.
+ *
+ * `endereco -> { endereco, nome, descobridor, quando }`
+ * @type {Map<string, object>}
+ */
+const descobertas = new Map();
+
+/** Serializa as escavações de um canal no formato que o `welcome` carrega. */
+function terrenoParaLista(canal) {
   const saida = [];
-  for (const [planetaId, mapa] of terreno) {
+  for (const [planetaId, mapa] of canal.terreno) {
     if (mapa.size > 0) saida.push([planetaId, [...mapa.values()]]);
   }
   return saida;
 }
 
-// O que já foi colhido neste universo vem do banco ANTES de aceitar conexões.
-// Carregar sob demanda deixaria o primeiro jogador ver, por alguns segundos,
-// arbustos que outra pessoa colheu semanas atrás.
+/** Serializa os props colhidos de um canal. */
+function colhidosParaLista(canal) {
+  const saida = [];
+  for (const [chave, indices] of canal.colhidos) saida.push([chave, [...indices]]);
+  return saida;
+}
+
+/**
+ * Tudo o que um cliente precisa para materializar um sistema.
+ *
+ * Sai no `welcome` (entrada na sala) e no `mundo` (troca de sistema): são o
+ * mesmo conteúdo em momentos diferentes, e uma função só evita que os dois
+ * caminhos divirjam — que é exatamente o tipo de diferença que só aparece
+ * depois de um salto, com o jogador dentro de um planeta que não deveria ter
+ * carregado.
+ */
+function retratoDoCanal(canal, exceto) {
+  return {
+    seed: canal.seed,
+    colhidos: colhidosParaLista(canal),
+    // Com o `frame` de volta em TODOS os eventos: quem chega agora nunca viu a
+    // criação da base e não teria como situá-la.
+    construcoes: [...canal.construcoes.values()].map((e) => ({
+      ...e,
+      frame: canal.frames.get(e.base) ?? null,
+    })),
+    terreno: terrenoParaLista(canal),
+    jogadores: [...canal.presentes]
+      .filter((id) => id !== exceto)
+      .map((id) => jogadores.get(id))
+      .filter(Boolean)
+      .map((j) => ({ id: j.id, nome: j.nome, estado: j.estado })),
+  };
+}
+
+// As descobertas são da GALÁXIA, não de um sistema: valem em todo canal e por
+// isso continuam sendo carregadas de uma vez, no boot.
 if (banco.disponivel) {
-  const guardado = await banco.carregarColhidos(SEED);
-  for (const [chave, indices] of guardado) colhidos.set(chave, indices);
-  const total = [...colhidos.values()].reduce((soma, c) => soma + c.size, 0);
-  console.log(`[db] ${total} props colhidos restaurados do universo ${SEED}`);
-
-  for (const evento of await banco.carregarConstrucoes(SEED)) {
-    construcoes.set(chaveDaPeca(evento), evento);
-    if (evento.frame) frames.set(evento.base, evento.frame);
+  for (const linha of await banco.carregarDescobertas()) {
+    descobertas.set(linha.endereco, {
+      endereco: linha.endereco,
+      nome: linha.nome,
+      descobridor: linha.descobridor,
+      quando: linha.quando instanceof Date ? linha.quando.toISOString() : linha.quando,
+    });
   }
-  console.log(`[db] ${construcoes.size} peças de base restauradas em ${frames.size} bases`);
-
-  let totalTerreno = 0;
-  for (const edicao of await banco.carregarTerreno(SEED)) {
-    terrenoDoPlaneta(edicao.planeta).set(edicao.id, edicao.dados);
-    totalTerreno++;
-  }
-  console.log(`[db] ${totalTerreno} escavações de terreno restauradas`);
+  console.log(`[db] ${descobertas.size} sistemas descobertos restaurados`);
 }
 
 /** Conta autenticada por conexão, quando houver banco. @type {Map<number,{contaId:number,login:string}>} */
@@ -192,7 +298,31 @@ function enviar(socket, mensagem) {
   if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(mensagem));
 }
 
-function transmitir(mensagem, exceto) {
+/**
+ * Envia para todos os jogadores de UM canal.
+ *
+ * A antiga `transmitir` mandava para a sala inteira, e era ela que fazia dois
+ * jogadores em sistemas diferentes se enxergarem. Toda difusão passa a exigir
+ * o canal: não existe mais um caminho que alcance a sala toda por engano.
+ */
+function transmitirNoCanal(canal, mensagem, exceto) {
+  const texto = JSON.stringify(mensagem);
+  for (const id of canal.presentes) {
+    if (id === exceto) continue;
+    const jogador = jogadores.get(id);
+    if (jogador?.socket.readyState === jogador?.socket.OPEN) jogador.socket.send(texto);
+  }
+}
+
+/**
+ * Difusão para a SALA INTEIRA, atravessando canais.
+ *
+ * Sobrou para as duas coisas que não pertencem a um sistema: o catálogo de
+ * descobertas (é da galáxia) e o chat global. Tudo o mais passa por
+ * `transmitirNoCanal` — o nome longo aqui é de propósito, para que usar o
+ * alcance errado seja uma escolha visível no código.
+ */
+function transmitirParaTodos(mensagem, exceto) {
   const texto = JSON.stringify(mensagem);
   for (const jogador of jogadores.values()) {
     if (jogador.id === exceto) continue;
@@ -200,11 +330,29 @@ function transmitir(mensagem, exceto) {
   }
 }
 
-/** Serializa o mapa de colhidos para caber num JSON. */
-function colhidosParaLista() {
-  const saida = [];
-  for (const [chave, indices] of colhidos) saida.push([chave, [...indices]]);
-  return saida;
+/** Tira o jogador do canal atual, avisando quem fica. */
+function sairDoCanal(jogador) {
+  const canal = canais.get(jogador.seed);
+  if (!canal) return;
+  canal.presentes.delete(jogador.id);
+  transmitirNoCanal(canal, { type: 'saiu', id: jogador.id });
+  // O canal vazio fica na memória de propósito: quem sai de um sistema
+  // costuma voltar, e o estado dele é pequeno perto do custo de reler o banco.
+}
+
+/** Põe o jogador num canal e devolve o retrato para ele. */
+async function entrarNoCanal(jogador, seed) {
+  const canal = canalDe(seed);
+  await prepararCanal(canal);
+
+  jogador.seed = canal.seed;
+  // A posição antiga é de OUTRO sistema: mantê-la faria o avatar aparecer no
+  // canal novo nas coordenadas do planeta anterior, até o primeiro pacote.
+  jogador.estado = null;
+  canal.presentes.add(jogador.id);
+
+  transmitirNoCanal(canal, { type: 'entrou', id: jogador.id, nome: jogador.nome }, jogador.id);
+  return canal;
 }
 
 servidor.on('connection', (socket) => {
@@ -252,7 +400,13 @@ servidor.on('connection', (socket) => {
               return;
             }
             contas.set(id, { contaId: resultado.id, login });
-            const progresso = await banco.carregarProgresso(resultado.id, SEED);
+            // O progresso mais RECENTE, seja de qual sistema for.
+            //
+            // A tabela é (conta, seed) — uma linha por sistema visitado —, e
+            // pedir a do sistema de entrada devolveria o estado de um lugar
+            // onde a pessoa talvez não esteja há semanas. O estado guardado já
+            // carrega o campo `sistema`, então o cliente sabe para onde voltar.
+            const progresso = await banco.carregarProgressoMaisRecente(resultado.id);
             enviar(socket, { type: 'login', ok: true, login, novo: resultado.novo, progresso });
             console.log(`[mp] ${login} autenticou (${resultado.novo ? 'conta nova' : 'conta existente'})`);
           })
@@ -267,46 +421,59 @@ servidor.on('connection', (socket) => {
         // Chega periodicamente e ao sair. Sem conta, não há onde guardar.
         const conta = contas.get(id);
         if (!conta || !banco.disponivel) return;
+        // O progresso é gravado no sistema em que o jogador ESTÁ.
         banco
-          .salvarProgresso(conta.contaId, SEED, mensagem.progresso ?? {})
+          .salvarProgresso(conta.contaId, jogadores.get(id)?.seed ?? SEED, mensagem.progresso ?? {})
           .catch((erro) => console.error('[db] falha ao salvar progresso:', erro.message));
         break;
       }
 
       case 'join': {
         const nome = String(mensagem.nome ?? `Piloto ${id}`).slice(0, 24);
-        jogadores.set(id, { id, nome, socket, estado: null });
+        // O cliente diz em que sistema está; sem isso, cai no de entrada.
+        const seed = Number.isFinite(mensagem.seed) ? mensagem.seed >>> 0 : SEED;
+        const jogador = { id, nome, socket, estado: null, seed };
+        jogadores.set(id, jogador);
 
-        enviar(socket, {
-          type: 'welcome',
-          id,
-          seed: SEED,
-          colhidos: colhidosParaLista(),
-          // Com o `frame` de volta em TODOS os eventos: o cliente que entra
-          // agora nunca viu a criação da base e não teria como situá-la.
-          construcoes: [...construcoes.values()].map((e) => ({
-            ...e,
-            frame: frames.get(e.base) ?? null,
-          })),
-          terreno: terrenoParaLista(),
-          // TODOS os outros, inclusive quem ainda não mandou posição.
-          //
-          // O filtro `&& j.estado` que existia aqui parecia inofensivo — para
-          // que anunciar alguém sem posição conhecida? — e produzia o pior bug
-          // possível numa sala: dois jogadores que entram e ficam parados nunca
-          // ficam sabendo um do outro. O `entrou` do primeiro foi transmitido
-          // antes de o segundo existir, e o `welcome` do segundo o omitia por
-          // falta de estado. Cada um via uma sala vazia.
-          //
-          // O cliente lida com `estado: null` sozinho: o avatar nasce invisível
-          // e aparece no primeiro pacote de posição.
-          jogadores: [...jogadores.values()]
-            .filter((j) => j.id !== id)
-            .map((j) => ({ id: j.id, nome: j.nome, estado: j.estado })),
+        entrarNoCanal(jogador, seed).then((canal) => {
+          enviar(socket, {
+            type: 'welcome',
+            id,
+            ...retratoDoCanal(canal, id),
+            // O catálogo de descobertas é da GALÁXIA e vai inteiro, uma vez. São
+            // ~40 bytes por sistema DESCOBERTO (não por sistema existente),
+            // então mesmo uma campanha longa cabe em alguns quilobytes — e
+            // mandar sob demanda exigiria um pedido a cada estrela que o cursor
+            // toca no mapa.
+            descobertas: [...descobertas.values()],
+          });
+          console.log(
+            `[mp] ${nome} (#${id}) entrou no sistema ${canal.seed} — ` +
+            `${canal.presentes.size} ali, ${jogadores.size} na sala`
+          );
         });
+        break;
+      }
 
-        transmitir({ type: 'entrou', id, nome }, id);
-        console.log(`[mp] ${nome} (#${id}) entrou — ${jogadores.size} na sala`);
+      case 'sistema': {
+        // ---------------------------------------------------------------
+        // TROCA DE CANAL — é o que o hiperimpulsor virou do lado da rede.
+        //
+        // Chega no auge do clarão do salto, quando o cliente já trocou o
+        // universo local. A ordem importa: sair do canal antigo ANTES de
+        // entrar no novo, senão um jogador que salta e volta ao mesmo
+        // sistema apareceria duplicado para quem ficou.
+        // ---------------------------------------------------------------
+        const jogador = jogadores.get(id);
+        if (!jogador || !Number.isFinite(mensagem.seed)) return;
+        const destino = mensagem.seed >>> 0;
+        if (destino === jogador.seed) return;
+
+        sairDoCanal(jogador);
+        entrarNoCanal(jogador, destino).then((canal) => {
+          enviar(socket, { type: 'mundo', ...retratoDoCanal(canal, id) });
+          console.log(`[mp] ${jogador.nome} (#${id}) saltou para o sistema ${canal.seed} — ${canal.presentes.size} ali`);
+        });
         break;
       }
 
@@ -314,13 +481,17 @@ servidor.on('connection', (socket) => {
         const jogador = jogadores.get(id);
         if (!jogador) return;
         jogador.estado = mensagem.estado;
-        // Repassa cru: o pacote já vem no formato que o cliente consome, e
-        // reempacotar por jogador multiplicaria o custo por conexão.
-        transmitir({ type: 'state', id, estado: mensagem.estado }, id);
+        // Repassa cru e SÓ para o canal: o pacote já vem no formato que o
+        // cliente consome, e reempacotar por jogador multiplicaria o custo por
+        // conexão.
+        transmitirNoCanal(canalDe(jogador.seed), { type: 'state', id, estado: mensagem.estado }, id);
         break;
       }
 
       case 'construcao': {
+        const jogadorC = jogadores.get(id);
+        if (!jogadorC) return;
+        const canal = canalDe(jogadorC.seed);
         const evento = mensagem.evento;
         // Validação mínima antes de gravar: um pacote malformado aqui vira uma
         // linha permanente no banco que todo cliente futuro tenta interpretar.
@@ -338,29 +509,32 @@ servidor.on('connection', (socket) => {
         const chave = chaveDaPeca(evento);
 
         if (evento.tipo === 'demolir') {
-          if (!construcoes.delete(chave)) return;
+          if (!canal.construcoes.delete(chave)) return;
           banco
-            .removerConstrucao(SEED, evento.base, evento.cel, evento.face)
+            .removerConstrucao(canal.seed, evento.base, evento.cel, evento.face)
             .catch((erro) => console.error('[db] falha ao demolir:', erro.message));
         } else {
           // Slot ocupado: dois jogadores construíram no mesmo lugar no mesmo
           // instante. O primeiro pacote a chegar vence e o segundo é descartado
           // — sem isso, os dois clientes ficariam com peças diferentes ali.
-          if (construcoes.has(chave)) return;
+          if (canal.construcoes.has(chave)) return;
           if (typeof evento.peca !== 'string' || evento.peca.length > 24) return;
 
-          if (evento.frame) frames.set(evento.base, evento.frame);
-          construcoes.set(chave, evento);
+          if (evento.frame) canal.frames.set(evento.base, evento.frame);
+          canal.construcoes.set(chave, evento);
           banco
-            .gravarConstrucao(SEED, evento, frames.get(evento.base))
+            .gravarConstrucao(canal.seed, evento, canal.frames.get(evento.base))
             .catch((erro) => console.error('[db] falha ao gravar construção:', erro.message));
         }
 
-        transmitir({ type: 'construcao', evento }, id);
+        transmitirNoCanal(canal, { type: 'construcao', evento }, id);
         break;
       }
 
       case 'terreno': {
+        const jogadorT = jogadores.get(id);
+        if (!jogadorT) return;
+        const canal = canalDe(jogadorT.seed);
         const e = mensagem.edicao;
         // Uma edição malformada aqui vira uma linha permanente que todo cliente
         // futuro aplica ao terreno — e um `r` gigante achataria um continente.
@@ -376,39 +550,133 @@ servidor.on('connection', (socket) => {
         }
 
         const edicao = { id: e.id, x: e.x, y: e.y, z: e.z, r: e.r, f: e.f, t: e.t === 1 ? 1 : 0 };
-        terrenoDoPlaneta(mensagem.planeta).set(edicao.id, edicao);
+        terrenoDoPlaneta(canal, mensagem.planeta).set(edicao.id, edicao);
         banco
-          .gravarTerreno(SEED, mensagem.planeta, edicao)
+          .gravarTerreno(canal.seed, mensagem.planeta, edicao)
           .catch((erro) => console.error('[db] falha ao gravar terreno:', erro.message));
-        transmitir({ type: 'terreno', planeta: mensagem.planeta, edicao }, id);
+        transmitirNoCanal(canal, { type: 'terreno', planeta: mensagem.planeta, edicao }, id);
 
         // Orçamento: as escavações mais antigas do planeta são abandonadas e o
         // relevo volta ao procedural ali. Avisa TODO MUNDO, inclusive quem
         // acabou de cavar — do contrário cada cliente teria uma ideia diferente
         // de quais buracos ainda existem.
-        const expiradas = podarTerreno(mensagem.planeta);
+        const expiradas = podarTerreno(canal, mensagem.planeta);
         if (expiradas.length > 0) {
           banco
-            .removerTerreno(SEED, mensagem.planeta, expiradas)
+            .removerTerreno(canal.seed, mensagem.planeta, expiradas)
             .catch((erro) => console.error('[db] falha ao podar terreno:', erro.message));
-          transmitir({ type: 'terreno-expirado', planeta: mensagem.planeta, ids: expiradas });
+          transmitirNoCanal(canal, { type: 'terreno-expirado', planeta: mensagem.planeta, ids: expiradas });
           enviar(socket, { type: 'terreno-expirado', planeta: mensagem.planeta, ids: expiradas });
         }
         break;
       }
 
+      case 'descobrir': {
+        // -------------------------------------------------------------------
+        // QUEM CHEGA PRIMEIRO FICA COM O CRÉDITO — E O SERVIDOR É QUEM DECIDE.
+        //
+        // O cliente reivindica todo sistema em que entra, inclusive um que ele
+        // já visitou e um que outra pessoa descobriu ontem. Deixar assim é
+        // deliberado: a alternativa é o cliente perguntar antes de reivindicar,
+        // o que dobra as mensagens para evitar um custo que aqui é um `has` num
+        // Map. E o cliente não teria como decidir sozinho de qualquer forma —
+        // ele só conhece o catálogo do momento em que entrou.
+        // -------------------------------------------------------------------
+        const jogador = jogadores.get(id);
+        if (!jogador) return;
+
+        const endereco = String(mensagem.endereco ?? '').slice(0, 19);
+        const nome = String(mensagem.nome ?? '').slice(0, 48);
+        if (!endereco || !nome) return;
+        if (descobertas.has(endereco)) return;
+
+        const registro = {
+          endereco,
+          nome,
+          descobridor: jogador.nome,
+          quando: new Date().toISOString(),
+        };
+        descobertas.set(endereco, registro);
+
+        banco
+          .registrarDescoberta(endereco, nome, jogador.nome, contas.get(id)?.contaId ?? null)
+          .catch((erro) => console.error('[db] falha ao gravar descoberta:', erro.message));
+
+        // Para TODOS, inclusive quem reivindicou: é a confirmação de que o
+        // crédito é dele, e o cliente não marca nada antes de receber isto. O
+        // `exceto` no `transmitir` evita que o autor receba a mesma mensagem
+        // duas vezes — inofensivo (o registro é idempotente), mas confunde
+        // qualquer um que abra o inspetor de rede para entender o protocolo.
+        // A descoberta é da GALÁXIA: vale para todo mundo, em qualquer sistema.
+        // É a única difusão que continua atravessando os canais, e é o que
+        // permite ver no mapa que alguém plantou bandeira do outro lado do
+        // braço espiral enquanto você explorava aqui.
+        transmitirParaTodos({ type: 'descoberta', ...registro }, id);
+        enviar(socket, { type: 'descoberta', ...registro });
+        console.log(`[mp] ${jogador.nome} descobriu ${nome}`);
+        break;
+      }
+
       case 'harvest': {
+        const jogadorH = jogadores.get(id);
+        if (!jogadorH) return;
+        const canal = canalDe(jogadorH.seed);
         const chave = `${mensagem.planeta}:${mensagem.chunk}`;
-        let indices = colhidos.get(chave);
-        if (!indices) colhidos.set(chave, (indices = new Set()));
+        let indices = canal.colhidos.get(chave);
+        if (!indices) canal.colhidos.set(chave, (indices = new Set()));
         // Já colhido: não retransmite. Sem esta guarda, dois jogadores mirando
         // o mesmo arbusto geram um eco infinito entre clientes.
         if (indices.has(mensagem.indice)) return;
         indices.add(mensagem.indice);
         banco
-          .registrarColheita(SEED, mensagem.planeta, mensagem.chunk, mensagem.indice)
+          .registrarColheita(canal.seed, mensagem.planeta, mensagem.chunk, mensagem.indice)
           .catch((erro) => console.error('[db] falha ao gravar colheita:', erro.message));
-        transmitir({ type: 'harvest', planeta: mensagem.planeta, chunk: mensagem.chunk, indice: mensagem.indice }, id);
+        transmitirNoCanal(
+          canal,
+          { type: 'harvest', planeta: mensagem.planeta, chunk: mensagem.chunk, indice: mensagem.indice },
+          id
+        );
+        break;
+      }
+
+      /* ==================================================================
+         CHAT
+         ==================================================================
+         Dois alcances, e a diferença entre eles é a razão de o chat existir
+         num jogo de galáxia: o LOCAL só chega a quem está no mesmo sistema —
+         é conversa com quem está no mesmo lugar — e o GLOBAL atravessa tudo,
+         que é o único canal por onde duas pessoas separadas por mil
+         anos-luz conseguem combinar de se encontrar.
+
+         O servidor carimba o autor: o cliente manda apenas o texto. Deixar o
+         nome vir do pacote seria deixar qualquer um assinar como qualquer um.
+         ================================================================== */
+      case 'chat': {
+        const jogador = jogadores.get(id);
+        if (!jogador) return;
+
+        const texto = String(mensagem.texto ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
+        if (!texto) return;
+
+        // Limite de vazão por conexão: uma mensagem a cada 700 ms. Um cliente
+        // modificado poderia inundar a sala inteira, e o custo de segurar isto
+        // é um número por jogador.
+        const agora = Date.now();
+        if (agora - (jogador.ultimoChat ?? 0) < 700) return;
+        jogador.ultimoChat = agora;
+
+        const global = mensagem.escopo === 'global';
+        const pacote = {
+          type: 'chat',
+          escopo: global ? 'global' : 'local',
+          de: jogador.nome,
+          id: jogador.id,
+          texto,
+          quando: agora,
+        };
+
+        if (global) transmitirParaTodos(pacote);
+        else transmitirNoCanal(canalDe(jogador.seed), pacote);
         break;
       }
     }
@@ -417,9 +685,9 @@ servidor.on('connection', (socket) => {
   socket.on('close', () => {
     const jogador = jogadores.get(id);
     if (!jogador) return;
+    sairDoCanal(jogador);
     jogadores.delete(id);
     contas.delete(id);
-    transmitir({ type: 'saiu', id });
     console.log(`[mp] ${jogador.nome} (#${id}) saiu — ${jogadores.size} na sala`);
   });
 });

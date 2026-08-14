@@ -90,6 +90,7 @@ export class AudioEngine {
     this._buildNoise();
     this._buildEngine();
     this._buildWind();
+    this._buildChuva();
     this._buildPulse();
     this._buildBeam();
 
@@ -195,6 +196,31 @@ export class AudioEngine {
     this._noiseSource().connect(this.windFilter);
     this.windFilter.connect(this.windGain);
     this.windGain.connect(this.master);
+  }
+
+  /**
+   * Precipitação: ruído filtrado, separado do vento.
+   *
+   * Podia sair da mesma camada do vento com outra frequência, e não sai por um
+   * motivo prático: as duas tocam JUNTAS. Chove com vento, e um único
+   * oscilador teria de escolher entre soar como um ou como outro. Chuva é
+   * banda alta e chiada, ventania de areia é banda média e áspera — com dois
+   * ganhos independentes, o mesmo par de nós cobre os dois climas e a mistura
+   * entre eles.
+   */
+  _buildChuva() {
+    const ctx = this.ctx;
+
+    this.rainGain = ctx.createGain();
+    this.rainGain.gain.value = 0;
+
+    this.rainFilter = ctx.createBiquadFilter();
+    this.rainFilter.type = 'highpass';
+    this.rainFilter.frequency.value = 1800;
+
+    this._noiseSource().connect(this.rainFilter);
+    this.rainFilter.connect(this.rainGain);
+    this.rainGain.connect(this.master);
   }
 
   /** Pulse drive: um zumbido agudo que sobe junto com a rampa de engate. */
@@ -341,6 +367,15 @@ export class AudioEngine {
       : Math.min(s.speed / 500, 1);
     set(this.windGain.gain, s.atmosphere * (0.03 + speedWind * 0.2));
     set(this.windFilter.frequency, 320 + speedWind * 1600);
+
+    // --- Clima ---------------------------------------------------------------
+    // Só a pé e só dentro do ar: dentro da nave o motor cobre tudo, e no vácuo
+    // não há meio para o som atravessar.
+    const chuva = (s.chuva ?? 0) * s.atmosphere * (s.onFoot ? 1 : 0.35);
+    set(this.rainGain.gain, chuva * 0.09);
+    // Areia é grave e abafada; chuva é chiado agudo. Uma frequência de corte
+    // cobre os dois extremos sem um segundo filtro.
+    set(this.rainFilter.frequency, s.climaAreia ? 700 : 1800);
 
     // --- Pulse --------------------------------------------------------------
     set(this.pulseGain.gain, s.pulseSpool * 0.16);
@@ -523,6 +558,30 @@ export class AudioEngine {
   /* ===================================================================== */
   /* Controle                                                               */
   /* ===================================================================== */
+
+  /**
+   * Cala as camadas CONTÍNUAS: motor, propulsão, vento, pulse e feixe.
+   *
+   * Existe porque as camadas contínuas não são disparos com fim: são
+   * osciladores ligados desde o `start()`, cujo volume é escrito a cada frame
+   * por `update`. Parar de chamar `update` — o que acontece quando o jogo pausa
+   * para o mapa galáctico — não silencia nada; congela o último valor e o motor
+   * fica roncando indefinidamente sobre uma tela onde não há nave.
+   *
+   * A constante de tempo é maior que a de `update` (0.08 contra SMOOTH): o
+   * corte é uma transição de contexto, e um desligamento abrupto do motor soa
+   * como um defeito no som, não como uma pausa.
+   *
+   * Sons pontuais (blips da interface) continuam valendo — é justamente com um
+   * deles que o mapa abre.
+   */
+  silenciarContinuos() {
+    if (!this.ready) return;
+    const now = this.ctx.currentTime;
+    for (const g of [this.engineGain, this.thrustGain, this.windGain, this.rainGain, this.pulseGain, this.beamGain]) {
+      g.gain.setTargetAtTime(0, now, 0.08);
+    }
+  }
 
   /** @param {number} value 0..1 */
   setVolume(value) {

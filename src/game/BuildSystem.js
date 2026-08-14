@@ -476,14 +476,31 @@ export class BuildSystem {
         if (peca.encaixe === 'borda') giro = livre.giro;
       }
     }
-    cel.length = 0;
-    cel.push(...cel2);
+    // -----------------------------------------------------------------------
+    // A CÓPIA SÓ ACONTECE SE O ARRAY FOR OUTRO.
+    //
+    // Sem esta condição o caso NORMAL — nenhum escorregamento, `cel2` sendo o
+    // PRÓPRIO `cel` — se autodestruía: `cel.length = 0` esvaziava o array e o
+    // spread logo em seguida lia dele mesmo, agora vazio. A mira saía com
+    // `cel: []`, e daí em diante tudo era `undefined`: a chave do slot virava
+    // "undefined,undefined,undefined,-1" e a peça colocada gerava um platô com
+    // raio e direção NaN, o que travava a invalidação de chunks do planeta.
+    //
+    // O sintoma era o pior possível para diagnosticar — o jogo congelava ao
+    // colocar QUALQUER peça, e só na primeira, porque a partir da segunda a
+    // chave repetida já era recusada antes.
+    // -----------------------------------------------------------------------
+    if (cel2 !== cel) {
+      cel.length = 0;
+      cel.push(...cel2);
+    }
     face = face2;
 
     const chave = `${cel[0]},${cel[1]},${cel[2]},${face}`;
     const ocupado = base?.pecas.has(chave) ?? false;
     const pago = this._podePagar(peca.custo);
     const cheia = (base?.pecas.size ?? 0) >= MAX_PECAS_POR_BASE;
+    const apoiado = this._temApoio(base, cel, face, peca, alvo.noTerreno === true);
 
     this.mira = {
       base,
@@ -495,8 +512,19 @@ export class BuildSystem {
       face,
       giro,
       chave,
-      valido: !ocupado && pago && !cheia,
-      motivo: cheia ? 'base no limite de peças' : ocupado ? 'ocupado' : pago ? null : 'recursos insuficientes',
+      valido: !ocupado && pago && !cheia && apoiado,
+      // A ordem das razões é a da precedência na hora de explicar: o limite da
+      // base é definitivo, o slot ocupado é onde se está mirando, e a falta de
+      // apoio vem antes do custo porque mover a mira resolve uma e não a outra.
+      motivo: cheia
+        ? 'base no limite de peças'
+        : ocupado
+          ? 'ocupado'
+          : !apoiado
+            ? (peca.encaixe === 'mobilia' ? 'precisa de piso embaixo' : 'sem apoio: encoste no chão ou na base')
+            : pago
+              ? null
+              : 'recursos insuficientes',
     };
 
     this._mostrarFantasma(planeta, base, alvo.frame, cel, face, giro, this.mira.valido);
@@ -516,7 +544,7 @@ export class BuildSystem {
       if (planeta.sampleAt(_p).altitude <= 0) {
         const frame = this._frameDaBase(planeta, _p, direcao);
         // A origem da base FUTURA é este ponto, logo a célula é a (0,0,0).
-        return { local: new THREE.Vector3(0, 0, 0), frame };
+        return { local: new THREE.Vector3(0, 0, 0), frame, noTerreno: true };
       }
     }
     return null;
@@ -552,17 +580,105 @@ export class BuildSystem {
       ponto = _q.clone();
     }
 
-    if (ponto) return { local: ponto, frame: null };
+    // Um plano de nível é estrutura construída, não chão.
+    if (ponto) return { local: ponto, frame: null, noTerreno: false };
 
     // Nenhum plano serve: cai no terreno e converte para o espaço da base.
     const planeta = this.starSystem.planets[base.planetaId];
     for (let d = 1.5; d <= ALCANCE; d += 0.5) {
       _p.copy(olho).addScaledVector(direcao, d);
       if (planeta.sampleAt(_p).altitude <= 0) {
-        return { local: _p.clone().applyMatrix4(base.inversa), frame: null };
+        return { local: _p.clone().applyMatrix4(base.inversa), frame: null, noTerreno: true };
       }
     }
     return null;
+  }
+
+  /* ===================================================================== */
+  /* Apoio                                                                 */
+  /* ===================================================================== */
+
+  /**
+   * Esta peça teria em que se apoiar?
+   *
+   * ---------------------------------------------------------------------
+   * NADA FLUTUA
+   * ---------------------------------------------------------------------
+   * Toda peça precisa encostar no CHÃO ou em outra peça que faça sentido para o
+   * tipo dela. Sem esta regra dava para sair colocando piso no ar, um a um, e
+   * construir uma passarela até o céu — e o resultado nem parecia um bug, o que
+   * é pior: parecia que o jogo não tinha regra nenhuma de construção.
+   *
+   * A checagem é intencionalmente LOCAL: pergunta só pelos vizinhos imediatos,
+   * não se a peça está ligada ao chão por um caminho. Verificar conectividade
+   * real exigiria uma busca em largura por toda a base a cada frame de mira, e o
+   * caso que ela pegaria a mais — demolir o pé de uma torre e deixar o topo
+   * boiando — é raro e visivelmente culpa de quem demoliu.
+   *
+   * ---------------------------------------------------------------------
+   * QUEM ENCAIXA COM QUEM
+   * ---------------------------------------------------------------------
+   *   piso    ↔ piso ao lado, piso abaixo, parede do nível de baixo (que o
+   *             sustenta) ou parede do próprio nível.
+   *   parede  ↔ piso de uma das duas células que ela separa (fica em pé sobre
+   *             ele), piso do nível DE CIMA (ela segura o teto), parede
+   *             embaixo (empilhamento) ou parede vizinha do mesmo nível.
+   *   mobília ↔ exige piso na MESMA célula. Uma mesa no ar não tem leitura
+   *             possível, e sobre o terreno ela já é permitida pelo chão.
+   *
+   * Não existe peça de "teto" no kit: o teto de um cômodo é o PISO do nível
+   * seguinte, e é por isso que a regra da parede olha para `y + 1`.
+   *
+   * @param {object|null} base
+   * @param {number[]} cel
+   * @param {number} face slot canônico (-1 piso, -2 mobília, 0 e 3 arestas)
+   * @param {object} peca
+   * @param {boolean} noTerreno o ponto mirado é o chão, e não estrutura
+   */
+  _temApoio(base, cel, face, peca, noTerreno) {
+    // O chão apoia qualquer coisa — é o caso da primeira peça de toda base.
+    if (noTerreno) return true;
+    if (!base) return false;
+
+    const [x, y, z] = cel;
+    const tem = (px, py, pz, f) => base.pecas.has(`${px},${py},${pz},${f}`);
+    /** As quatro arestas da célula (px,py,pz), em forma canônica. */
+    const arestasDa = (px, py, pz) => [
+      [px, py, pz, 0], [px, py, pz, 3],
+      [px, py, pz + 1, 0], [px - 1, py, pz, 3],
+    ];
+
+    if (peca.encaixe === 'mobilia') {
+      return tem(x, y, z, SLOT_PISO);
+    }
+
+    if (peca.encaixe === 'celula') {
+      if (tem(x, y - 1, z, SLOT_PISO)) return true;
+      if (
+        tem(x + 1, y, z, SLOT_PISO) || tem(x - 1, y, z, SLOT_PISO) ||
+        tem(x, y, z + 1, SLOT_PISO) || tem(x, y, z - 1, SLOT_PISO)
+      ) return true;
+      // Paredes do nível de baixo sustentam a laje; as do próprio nível são
+      // encosto lateral (o caso de fechar o vão de um cômodo já erguido).
+      for (const [ax, ay, az, af] of arestasDa(x, y - 1, z)) if (tem(ax, ay, az, af)) return true;
+      for (const [ax, ay, az, af] of arestasDa(x, y, z)) if (tem(ax, ay, az, af)) return true;
+      return false;
+    }
+
+    // --- Borda (parede, porta, janela, guarda-corpo) ------------------------
+    // As duas células que a aresta separa. Ver `_canonizar`: a face 0 é o lado
+    // −Z da célula e a face 3, o lado +X.
+    const vizinha = face === 0 ? [x, y, z - 1] : [x + 1, y, z];
+
+    if (tem(x, y, z, SLOT_PISO) || tem(vizinha[0], y, vizinha[2], SLOT_PISO)) return true;
+    if (tem(x, y + 1, z, SLOT_PISO) || tem(vizinha[0], y + 1, vizinha[2], SLOT_PISO)) return true;
+    if (tem(x, y - 1, z, face)) return true;
+
+    for (const [ax, ay, az, af] of [...arestasDa(x, y, z), ...arestasDa(vizinha[0], y, vizinha[2])]) {
+      if (ax === x && az === z && af === face) continue; // ela mesma
+      if (tem(ax, ay, az, af)) return true;
+    }
+    return false;
   }
 
   /** Existe alguma peça na célula ou coladas nela? (evita construir no vazio) */

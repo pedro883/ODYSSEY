@@ -149,14 +149,26 @@ export function createTerrainSampler(cfg, campoInicial = null) {
     // 2. Máscara continental: montanhas só crescem em terra firme.
     const landMask = smoothstep(-0.05, 0.30, continent);
 
-    // 3. Cadeias montanhosas (ridged), moduladas por um segundo campo lento
-    //    para que existam regiões planas e regiões acidentadas.
-    const belt = smoothstep(-0.2, 0.45, nContinent(x * 0.6 + 100, y * 0.6, z * 0.6));
-    const mountains =
-      Math.max(0, ridged(nMountain, x, y, z, 6, P.mountainFreq, 0.5, 2.1)) *
-      landMask *
-      belt *
-      P.mountainness;
+    // -----------------------------------------------------------------------
+    // 3. Cadeias montanhosas.
+    //
+    // O termo `ridged` sozinho dá relevo acidentado, mas com a mesma amplitude
+    // em toda a região acidentada — morros do mesmo tamanho até o horizonte,
+    // que é o que fazia o planeta parecer "ondulado" em vez de montanhoso.
+    //
+    // São três coisas empilhadas:
+    //   - `belt`, um campo lento, decide ONDE há cordilheira. A frequência
+    //     subiu de 0,6 para 1,5: a 0,6 metade do planeta inteiro era um bloco
+    //     acidentado, e a cadeia deixava de ser uma feição para virar o padrão.
+    //   - `crista` é o ruído ridged de sempre;
+    //   - `pico` eleva a crista a uma potência, o que empurra os valores altos
+    //     para cima e achata o resto. É o que separa cume de sopé: sem ele o
+    //     mesmo `mountainness` que dá um pico decente enche o vale de calombos.
+    // -----------------------------------------------------------------------
+    const belt = smoothstep(-0.15, 0.5, nContinent(x * 1.5 + 100, y * 1.5, z * 1.5));
+    const crista = Math.max(0, ridged(nMountain, x, y, z, 6, P.mountainFreq, 0.5, 2.1));
+    const pico = Math.pow(crista, P.peakSharpness);
+    const mountains = (crista * 0.35 + pico * 1.35) * landMask * belt * P.mountainness;
 
     // 4. Crateras: dominam mundos áridos, quase ausentes em mundos com oceano.
     const craters =
@@ -178,7 +190,23 @@ export function createTerrainSampler(cfg, campoInicial = null) {
     // que ser da ordem de centenas.
     const roughness = fbm(nDetail, x, y, z, 3, P.roughnessFreq, 0.5, 2.4) * P.roughnessAmp;
 
-    const h = continent * 0.5 + mountains * 0.8 + craters * 0.12 + detail + roughness;
+    // -----------------------------------------------------------------------
+    // 7. Cânions.
+    //
+    // O ruído ridged, INVERTIDO: onde ele forma cume, aqui forma fenda. O
+    // `smoothstep` estreito (0,88 a 1) é o que faz a parede ser parede — uma
+    // faixa larga daria um vale suave, e o que dá vertigem é a queda começar de
+    // uma vez, a um passo da borda.
+    //
+    // É a feição que mais muda a leitura da paisagem a pé: sem ela o relevo é
+    // sempre convexo (morros e mais morros) e o mundo não tem nenhum lugar
+    // onde se ENTRA. Não é caverna — um campo de altura não comporta teto — mas
+    // é o buraco que se desce, se percorre e do qual se sai por outro lugar.
+    // -----------------------------------------------------------------------
+    const veio = 1 - Math.abs(nCrater(x * P.gorgeFreq + 7.7, y * P.gorgeFreq - 3.1, z * P.gorgeFreq));
+    const canion = smoothstep(0.88, 1.0, veio) * landMask * P.gorgeDepth;
+
+    const h = continent * 0.5 + mountains * 0.8 + craters * 0.12 + detail + roughness - canion;
     const elevacao = h * cfg.maxElevation;
 
     // As escavações entram DEPOIS da multiplicação por `maxElevation` porque
@@ -190,9 +218,32 @@ export function createTerrainSampler(cfg, campoInicial = null) {
       : campo.alturaEm(x, y, z, elevacao);
   }
 
-  /** Umidade normalizada em [0,1] — separa deserto de floresta. */
+  /**
+   * Umidade normalizada em [0,1] — separa deserto de floresta.
+   *
+   * ---------------------------------------------------------------------
+   * DUAS ESCALAS, E A SEGUNDA É A QUE SE ANDA
+   * ---------------------------------------------------------------------
+   * Havia só o termo lento (frequência ~1,4 sobre a esfera unitária), cujo
+   * comprimento de onda é da ordem do próprio planeta. O resultado era
+   * honesto no mapa e monótono no chão: um hemisfério úmido e outro seco,
+   * então uma caminhada de vários minutos acontecia inteira dentro do mesmo
+   * bioma. O planeta tinha seis biomas e o jogador via um.
+   *
+   * O termo REGIONAL, algumas vezes mais rápido, quebra isso em manchas de
+   * poucos quilômetros: bosque, campo aberto e areia dentro do mesmo passeio.
+   * O peso menor mantém o clima planetário mandando na média — continua
+   * existindo um lado úmido do mundo, com variação dentro dele.
+   */
   function moistureAt(x, y, z) {
-    return clamp(fbm(nMoisture, x, y, z, 3, 1.4, 0.5, 2.0) * 0.5 + 0.5, 0, 1);
+    // O clima planetário fica EXATAMENTE como era, e a mancha entra somada por
+    // cima. Misturar os dois com pesos que somam 1 seria o caminho natural e
+    // reduziria a variação: somar dois campos independentes concentra o
+    // resultado no meio da faixa, e menos pontos cruzariam os limiares de
+    // bioma — o planeta ficaria MAIS uniforme, que é o oposto do objetivo.
+    const clima = fbm(nMoisture, x, y, z, 3, 1.4, 0.5, 2.0) * 0.5 + 0.5;
+    const mancha = fbm(nMoisture, x + 41.7, y - 18.3, z + 9.1, 3, P.patchFreq, 0.5, 2.15);
+    return clamp(clima + mancha * P.patchAmp, 0, 1);
   }
 
   /**
@@ -204,6 +255,11 @@ export function createTerrainSampler(cfg, campoInicial = null) {
     const latitude = Math.abs(y); // eixo Y = eixo polar do planeta
     let t = 1 - latitude * latitude;
     t += nTemp(x * 1.1, y * 1.1, z * 1.1) * 0.14;
+    // Variação regional, na mesma escala das manchas de umidade: é o que
+    // permite um vale mais quente ao lado de um planalto gelado sem depender
+    // da latitude. Sem ela, as faixas de temperatura são anéis perfeitos em
+    // volta do planeta e a neve vira uma listra no mapa.
+    t += nTemp(x * P.patchFreq + 5.3, y * P.patchFreq, z * P.patchFreq - 2.7) * P.patchAmp * 0.55;
     t -= Math.max(0, elevation / cfg.maxElevation) * P.lapseRate;
     return clamp(t * cfg.baseTemperature, 0, 1);
   }
@@ -261,11 +317,24 @@ export function createTerrainSampler(cfg, campoInicial = null) {
       g = lerp(pal.shallowOcean[1], pal.deepOcean[1], depth);
       b = lerp(pal.shallowOcean[2], pal.deepOcean[2], depth);
     } else {
-      // Terra: interpola úmido <-> seco, depois esfria em direção aos polos.
-      const wet = smoothstep(0.32, 0.66, moist);
+      // -------------------------------------------------------------------
+      // TRÊS PARADAS NO EIXO DA UMIDADE: seco -> gramado -> mata.
+      //
+      // Com duas, a umidade só escolhia entre areia e verde-claro, e o
+      // resultado era um planeta de uma cor só com regiões mais ou menos
+      // desbotadas — os biomas existiam na classificação e não na tela. A
+      // terceira parada é o que faz uma mancha de floresta aparecer como
+      // mancha, vista da nave, sem depender de as árvores estarem carregadas.
+      // -------------------------------------------------------------------
+      const wet = smoothstep(0.30, 0.58, moist);
       r = lerp(pal.dry[0], pal.grass[0], wet);
       g = lerp(pal.dry[1], pal.grass[1], wet);
       b = lerp(pal.dry[2], pal.grass[2], wet);
+
+      const mata = smoothstep(0.60, 0.80, moist);
+      r = lerp(r, pal.forest[0], mata);
+      g = lerp(g, pal.forest[1], mata);
+      b = lerp(b, pal.forest[2], mata);
 
       const cold = smoothstep(0.42, 0.20, temp);
       r = lerp(r, pal.tundra[0], cold);

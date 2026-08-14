@@ -144,6 +144,35 @@ CREATE TABLE IF NOT EXISTS terreno (
 ) ENGINE=InnoDB;
 
 -- -----------------------------------------------------------------------------
+-- Descobertas de sistemas — quem chegou primeiro
+--
+-- A ÚNICA tabela que não é por universo. As outras guardam mutações de um
+-- mundo gerado por um seed; esta guarda um fato sobre a GALÁXIA, que é a mesma
+-- para todas as salas: o endereço de um sistema significa o mesmo lugar em
+-- qualquer partida, então quem o descobriu também.
+--
+-- A chave primária é o endereço, e é ela que implementa a regra inteira: a
+-- descoberta é de quem chegou primeiro, e um `INSERT IGNORE` faz o próprio
+-- banco recusar o segundo sem precisar de consulta, trava ou comparação de
+-- horário no servidor.
+--
+-- `nome` é derivável do endereço (ver `nomeDoSistema` em `shared/galaxy.js`) e
+-- está aqui de propósito: sem ele, ler o catálogo exigiria reimplementar o
+-- gerador de nomes em SQL ou em qualquer ferramenta que consulte a tabela.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS descoberta (
+  endereco    CHAR(19)     NOT NULL,
+  nome        VARCHAR(48)  NOT NULL,
+  descobridor VARCHAR(24)  NOT NULL,
+  -- Nulo quando quem descobriu estava sem conta: o crédito é do nome que ele
+  -- usou, e continua válido mesmo sem ninguém para reivindicá-lo.
+  conta_id    INT UNSIGNED NULL,
+  quando      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (endereco),
+  KEY idx_descoberta_conta (conta_id)
+) ENGINE=InnoDB;
+
+-- -----------------------------------------------------------------------------
 -- Usuário da aplicação
 --
 -- O servidor NÃO usa root: ele só precisa ler e escrever nestas tabelas. Se um

@@ -79,18 +79,6 @@ function accumulateFaceNormal(pos, nrm, a, b, c) {
   nrm[c] += nx; nrm[c + 1] += ny; nrm[c + 2] += nz;
 }
 
-/**
- * Hash determinístico do chunk. Precisa depender só de dados que identificam
- * o chunk (nunca de ordem de chegada ou tempo), senão a vegetação "dança" ao
- * recarregar o mesmo pedaço de terreno.
- */
-function chunkSeed(planetId, face, u0, v0) {
-  let h = (planetId * 374761393 + face * 668265263) >>> 0;
-  h = (h ^ Math.round(u0 * 1048576) * 2246822519) >>> 0;
-  h = (h ^ Math.round(v0 * 1048576) * 3266489917) >>> 0;
-  return h >>> 0;
-}
-
 function buildChunk(req, cfg, sampler, campo) {
   const { id, face, u0, v0, size, withProps } = req;
 
@@ -267,9 +255,9 @@ function buildChunk(req, cfg, sampler, campo) {
   }
 
   // 5. Vegetação, rochas e depósitos (só nos níveis de LOD mais finos).
-  const props = withProps
-    ? scatterProps(req, cfg, sampler, { padPos, padNrm, padDir, padElev, PAD, N, step, cx, cy, cz })
-    : new Float32Array(0);
+  // Só o centro do chunk: as posições saem relativas a ele, como as do terreno.
+  // A grade amostrada NÃO entra mais — ver o cabeçalho de `scatterProps`.
+  const props = withProps ? scatterProps(req, cfg, sampler, { cx, cy, cz }) : new Float32Array(0);
 
   return {
     type: 'chunk',
@@ -297,64 +285,148 @@ function buildChunk(req, cfg, sampler, campo) {
 /** Campos por instância no buffer devolvido. */
 export const PROP_STRIDE = 8;
 
+/** Espaçamento médio entre candidatos a prop, em unidades de mundo. */
+const ESPACAMENTO_PROPS = 4.0;
+
+/**
+ * Maior soma de pesos possível entre todos os biomas, com folga.
+ *
+ * Serve só para rejeitar candidatos ANTES de amostrar o terreno: um sorteio
+ * acima disto não vira prop em bioma nenhum, então não vale pagar três
+ * avaliações de ruído para descobrir isso. Se algum bioma passar deste total,
+ * o efeito é apenas props a menos — nunca props no lugar errado.
+ */
+const PESO_MAXIMO = 0.75;
+
+/**
+ * Semente de uma CÉLULA do espalhamento — não do chunk.
+ *
+ * É esta função que torna a vegetação estável: a mesma célula devolve a mesma
+ * semente independentemente de qual chunk (e de qual nível de LOD) esteja
+ * perguntando.
+ */
+function sementeDaCelula(planetId, face, ci, cj) {
+  let h = (planetId * 374761393 + face * 668265263) >>> 0;
+  h = (h ^ Math.imul(ci | 0, 2246822519)) >>> 0;
+  h = (h ^ Math.imul(cj | 0, 3266489917)) >>> 0;
+  h = Math.imul(h ^ (h >>> 15), 2246822519) >>> 0;
+  return h >>> 0;
+}
+
 /**
  * Distribui vegetação/rochas/depósitos sobre o chunk.
  *
- * Reaproveita a grade JÁ amostrada em vez de reavaliar o campo de ruído: cada
- * candidato custa uma leitura de array em vez de ~20 oitavas de fBm. Sem isso
- * o custo de um chunk com props dobraria.
+ * ===========================================================================
+ * O ESPALHAMENTO É DO LUGAR, NÃO DO CHUNK
+ * ===========================================================================
+ * Esta função já foi escrita da maneira óbvia: sortear N candidatos DENTRO do
+ * chunk, com uma semente derivada do chunk, lendo a grade que ele já amostrou.
+ * Era rápida e estava errada, de um jeito que só aparece em movimento.
  *
- * A distribuição é jitter em grade (não aleatório puro): pontos puramente
- * aleatórios formam aglomerados e buracos visíveis, o jitter dá cobertura
- * uniforme mantendo aparência natural.
+ * Um pedaço de terreno é coberto por um chunk diferente a cada nível de LOD. Se
+ * a semente, a contagem de células e as posições vêm do CHUNK, então o conjunto
+ * de props de um chunk de nível 7 e o dos seus quatro filhos de nível 8 são
+ * conjuntos DIFERENTES sobre o mesmo chão. E a quadtree troca de nível o tempo
+ * todo, a cada passo do jogador: o resultado é a vegetação inteira sendo
+ * substituída por outra a cada fronteira cruzada — arbustos trocando de lugar,
+ * árvores sumindo e nascendo dois metros ao lado. Era o "props pulando".
+ *
+ * A correção é ancorar o sorteio numa grade GLOBAL da face, com célula de
+ * tamanho fixo em unidades de mundo. Cada célula tem uma semente própria e
+ * produz um candidato; o chunk apenas ENUMERA as células que caem dentro dele.
+ * Duas coberturas diferentes do mesmo chão enxergam as mesmas células, com as
+ * mesmas sementes, nas mesmas posições — e trocar de LOD deixa de ter efeito
+ * visível.
+ *
+ * ===========================================================================
+ * POR QUE VOLTAR A AMOSTRAR O TERRENO
+ * ===========================================================================
+ * A versão anterior lia a grade do chunk, o que ARREDONDA a posição do prop
+ * para o vértice mais próximo — e esse vértice é outro em cada nível de LOD.
+ * Ou seja: mesmo com a grade global, o prop ainda saltaria alguns metros ao
+ * subdividir, e um arbusto perto de um limite de bioma poderia virar pedra.
+ *
+ * Amostrar o ponto exato custa três avaliações do campo (elevação e duas
+ * tangentes para o declive) por candidato aprovado. Nos níveis com props isso
+ * dá ~360 avaliações no pior caso, contra as ~1200 que a grade do próprio chunk
+ * já paga — cerca de 30% a mais num chunk, em troca de vegetação que não se
+ * mexe. O sorteio grosseiro (`PESO_MAXIMO`) derruba boa parte dos candidatos
+ * antes disso.
  */
 function scatterProps(req, cfg, sampler, grid) {
   const { face, u0, v0, size, planetId } = req;
-  const { padPos, padNrm, padDir, padElev, PAD, N, cx, cy, cz } = grid;
+  const { cx, cy, cz } = grid;
 
-  const rand = mulberry32(chunkSeed(planetId, face, u0, v0));
-  const chunkWorldSize = 2 * cfg.radius * size;
+  // Lado da célula em espaço paramétrico da face: `u` de 0 a 1 cobre 2·raio
+  // unidades de mundo, a mesma conversão que `chunkWorldSize` usa.
+  const passo = ESPACAMENTO_PROPS / (2 * cfg.radius);
 
-  // -----------------------------------------------------------------------
-  // Densidade constante por ÁREA.
-  //
-  // Usar um número FIXO de candidatos por chunk é o erro tentador: a área de
-  // um chunk cai 4x a cada nível de LOD, então a mesma contagem produz 4x mais
-  // props por metro quadrado no nível seguinte — o planeta vira um tapete de
-  // pedras exatamente onde o jogador chega mais perto.
-  //
-  // Derivando o número de células do TAMANHO DO CHUNK, o espaçamento em
-  // unidades de mundo fica constante e a densidade não depende do LOD.
-  // -----------------------------------------------------------------------
-  const SPACING = 4.0;
-  const cells = Math.max(2, Math.min(16, Math.round(chunkWorldSize / SPACING)));
+  const i0 = Math.floor(u0 / passo);
+  const i1 = Math.floor((u0 + size) / passo);
+  const j0 = Math.floor(v0 / passo);
+  const j1 = Math.floor((v0 + size) / passo);
+
   const out = [];
+  const dir = [0, 0, 0];
+  const tan = [0, 0, 0];
+  const bit = [0, 0, 0];
+  const desl = [0, 0, 0];
 
-  for (let j = 0; j < cells; j++) {
-    for (let i = 0; i < cells; i++) {
-      // Célula da grade do chunk correspondente a este candidato.
-      const fx = (i + rand()) / cells;
-      const fy = (j + rand()) / cells;
-      const gx = Math.min(N - 1, Math.floor(fx * (N - 1)));
-      const gy = Math.min(N - 1, Math.floor(fy * (N - 1)));
-      const src = ((gy + 1) * PAD + (gx + 1)) * 3;
-      const elev = padElev[(gy + 1) * PAD + (gx + 1)];
+  for (let cj = j0; cj <= j1; cj++) {
+    for (let ci = i0; ci <= i1; ci++) {
+      const rand = mulberry32(sementeDaCelula(planetId, face, ci, cj));
+
+      const u = (ci + rand()) * passo;
+      const v = (cj + rand()) * passo;
+
+      // ---------------------------------------------------------------
+      // CADA CÉLULA TEM UM DONO SÓ.
+      //
+      // As células da borda são enumeradas por dois chunks vizinhos, mas o
+      // ponto sorteado cai dentro de um só. O intervalo é semiaberto nos dois
+      // eixos, então nenhuma célula fica sem dono nem ganha dois — que
+      // apareceria como vegetação duplicada e z-fighting na costura.
+      // ---------------------------------------------------------------
+      if (u < u0 || u >= u0 + size || v < v0 || v >= v0 + size) continue;
+
+      // O sorteio do tipo vem ANTES de amostrar o terreno, e é sempre
+      // consumido: a sequência aleatória da célula precisa avançar igual em
+      // todos os chunks que a enumerem, senão a estabilidade se perde.
+      const roll = rand();
+      const escalaRand = rand();
+      const giro = rand();
+      const matiz = rand();
+      const raro = rand();
+      if (roll > PESO_MAXIMO) continue;
+
+      faceDirection(face, u, v, dir);
+      const elev = sampler.heightAt(dir[0], dir[1], dir[2]);
 
       // Nada nasce debaixo d'água.
       if (cfg.hasWater && elev < 0) continue;
 
-      const nx = padNrm[src], ny = padNrm[src + 1], nz = padNrm[src + 2];
-      const inv = 1 / (Math.hypot(nx, ny, nz) || 1);
-      const dx = padDir[src], dy = padDir[src + 1], dz = padDir[src + 2];
-      const slope = 1 - Math.max(0, (nx * inv) * dx + (ny * inv) * dy + (nz * inv) * dz);
+      // --- Declive por diferenças finitas em duas tangentes ----------------
+      tan[0] = -dir[1]; tan[1] = dir[0]; tan[2] = 0;
+      let comp = Math.hypot(tan[0], tan[1], tan[2]);
+      if (comp < 1e-8) { tan[0] = 1; tan[1] = 0; tan[2] = 0; comp = 1; }
+      tan[0] /= comp; tan[1] /= comp; tan[2] /= comp;
 
-      const biome = sampler.biomeAt(dx, dy, dz, elev, slope);
+      bit[0] = dir[1] * tan[2] - dir[2] * tan[1];
+      bit[1] = dir[2] * tan[0] - dir[0] * tan[2];
+      bit[2] = dir[0] * tan[1] - dir[1] * tan[0];
+
+      const eps = 0.0004;
+      desl[0] = dir[0] + tan[0] * eps; desl[1] = dir[1] + tan[1] * eps; desl[2] = dir[2] + tan[2] * eps;
+      const hA = sampler.heightAt(desl[0], desl[1], desl[2]);
+      desl[0] = dir[0] + bit[0] * eps; desl[1] = dir[1] + bit[1] * eps; desl[2] = dir[2] + bit[2] * eps;
+      const hB = sampler.heightAt(desl[0], desl[1], desl[2]);
+
+      const corrida = cfg.radius * eps;
+      const slope = Math.min(1, Math.hypot(hA - elev, hB - elev) / (corrida || 1));
+
+      const biome = sampler.biomeAt(dir[0], dir[1], dir[2], elev, slope);
       const scatter = biomeScatter(biome, cfg.type);
 
-      // Encostas íngremes só seguram rocha.
-      const steep = slope > 0.45;
-
-      const roll = rand();
       let type = -1;
       let acc = 0;
       for (let t = 0; t < scatter.weights.length; t++) {
@@ -362,22 +434,23 @@ function scatterProps(req, cfg, sampler, grid) {
         if (roll < acc) { type = t; break; }
       }
       if (type < 0) continue;
-      if (steep && type !== PROP_TYPE.ROCK) continue;
-
+      // Encostas íngremes só seguram rocha.
+      if (slope > 0.45 && type !== PROP_TYPE.ROCK) continue;
       // Depósitos são raros de propósito: são o objetivo da exploração.
-      if (type === PROP_TYPE.DEPOSIT && rand() > 0.16) continue;
+      if (type === PROP_TYPE.DEPOSIT && raro > 0.16) continue;
 
+      const r = cfg.radius + elev;
       out.push(
-        padPos[src] - cx,
-        padPos[src + 1] - cy,
-        padPos[src + 2] - cz,
+        dir[0] * r - cx,
+        dir[1] * r - cy,
+        dir[2] * r - cz,
         // Escala ABSOLUTA: um arbusto tem o mesmo tamanho independente do
         // nível de LOD do chunk em que caiu. Escalar pelo tamanho do chunk
         // faria a mesma planta encolher ao se aproximar dela.
-        scatter.scale[type] * (0.7 + rand() * 0.6),
-        rand() * Math.PI * 2,
+        scatter.scale[type] * (0.7 + escalaRand * 0.6),
+        giro * Math.PI * 2,
         type,
-        rand(),
+        matiz,
         // Índice do recurso: fixo por planeta para depósitos, para que o
         // jogador aprenda "este mundo tem X".
         (cfg.seed + type) % 4
