@@ -105,6 +105,27 @@ export function criarSonda(campo) {
    * @param {number} alcance até onde procurar, em unidades
    */
   function chaoAbaixo(dir, raio, alcance = 400) {
+    // -----------------------------------------------------------------------
+    // SE O PONTO JÁ ESTÁ NA ROCHA, NÃO HÁ CHÃO ABAIXO DELE.
+    //
+    // Esta guarda é a correção de um bug que fazia o jogador ATRAVESSAR o chão.
+    // `cruzamentoRadial` devolve a primeira troca de sinal, seja ela qual for.
+    // Partindo de dentro da rocha, a primeira troca descendo é rocha->ar: o
+    // TETO de uma caverna, dezenas de unidades abaixo. O jogo lia isso como "o
+    // chão está lá embaixo" e deixava o jogador cair.
+    //
+    // E o caso não era raro: um corpo parado no chão fica ligeiramente ABAIXO
+    // da superfície (é assim que a colisão o assenta), portanto dentro da
+    // rocha. Medido, 27% das posições de chão devolviam um piso falso — uma a
+    // cada quatro.
+    //
+    // Devolver `null` faz `Planet.sampleAt` manter a resposta do campo de
+    // altura, que é a certa: quem está dentro da rocha precisa ser empurrado
+    // para CIMA, para a superfície, e não atraído para um vão lá embaixo.
+    // -----------------------------------------------------------------------
+    const altura = campo.superficieEm(dir[0], dir[1], dir[2]);
+    if (amostra(dir, raio, altura) <= 0) return null;
+
     return cruzamentoRadial(dir, raio, raio - alcance, 2.0);
   }
 

@@ -292,7 +292,25 @@ export class Planet {
     // sob ela —, então quem está acima do relevo já tem a resposta certa e não
     // marcha. Na prática só paga quem está de fato dentro de uma caverna.
     // -----------------------------------------------------------------------
-    if (this.sonda && sample.altitude < 0) {
+    // -----------------------------------------------------------------------
+    // A CONDIÇÃO É ESTAR ABAIXO DO TERRENO, NÃO ABAIXO DO "CHÃO DE POUSO".
+    //
+    // A primeira versão usava `sample.altitude < 0`, e isso quebrou o oceano.
+    // Em mundo com água, `surfaceRadius` é deliberadamente o NÍVEL DO MAR e não
+    // o fundo — é essa convenção que faz a nave pousar na água e o jogador
+    // boiar. Debaixo d'água a altitude é quase sempre negativa, então a sonda
+    // disparava a todo instante e substituía o nível do mar pelo FUNDO,
+    // dezenas de unidades abaixo.
+    //
+    // O sintoma foi o jogador subindo sozinho, ~0,5 unidade por segundo, com
+    // `grounded` nunca verdadeiro: a cada quadro o jogo era informado de um
+    // chão muito mais fundo do que o real e a flutuação o empurrava.
+    //
+    // Estar dentro de uma caverna é estar abaixo do TERRENO (rocha), que é
+    // `radius + elevation` — sem o `max(…, 0)` do nível do mar.
+    // -----------------------------------------------------------------------
+    const abaixoDoTerreno = distance < this.config.radius + elevation;
+    if (this.sonda && abaixoDoTerreno) {
       // A sonda trabalha com um array simples, e não com `Vector3`: ela é
       // compartilhada com os workers, onde importar a engine inteira seria
       // desperdício. Passar o `Vector3` direto daria `dir[0] === undefined` e
