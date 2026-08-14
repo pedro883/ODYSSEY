@@ -99,10 +99,33 @@ toda divergência é defeito do mesher, não mudança de conteúdo.
       global de células (a correção dos props que saltavam entre LODs), ele é
       independente da malha. 5.651 instâncias na superfície, 50 de 56 chunks.
 
-- [ ] **7. Entradas de caverna**
-      **As cavernas existem e são habitáveis, mas ainda não há como CHEGAR nelas
-      pela superfície** — `margemTeto` sela o teto de propósito. Falta escolher
-      regiões onde um túnel sobe até aflorar.
+- [x] **7. Bocas de caverna**
+      Campo de baixa frequência com limiar alto suspende a margem de teto onde
+      é forte. Raro e contíguo de propósito: entrada de caverna deve ser algo
+      que se PROCURA, não um crivo na paisagem.
+
+      Medido, isolando o efeito na faixa rasa (<=6 unidades da superfície):
+
+        sem bocas ........... 0,00% das direções abertas (superfície selada)
+        bocas limiar 0,45 ... 0,75%
+        bocas limiar 0,55 ... 0,48%   <- escolhido, ~1 em 200
+        bocas limiar 0,65 ... 0,37%
+
+      Perfil vertical de uma boca real no jogo: sólido na superfície, VAZIO de 5
+      a 35 unidades, sólido de novo aos 45. Um poço com 40 unidades de vão.
+
+## Pendências conhecidas
+
+- **Props flutuam sobre as bocas.** `scatterProps` os coloca em
+  `raio + heightAt`, que é a superfície do campo de ALTURA. Onde uma boca abre,
+  o terreno volumétrico está abaixo disso e a vegetação fica pairando sobre o
+  buraco. Precisa consultar a sonda — é o passo 6b.
+- **Passo 3 (octree) e passo 5 (costuras de LOD) não foram feitos.** A quadtree
+  atual subdivide só nos eixos angulares, então a casca radial tem espessura
+  fixa: cavernas mais fundas que ~90 unidades abaixo da elevação mínima não são
+  desenhadas, ainda que a sonda as encontre.
+- **Sem captura visual limpa de uma boca.** A verificação é numérica. As
+  tentativas de fotografar puseram a câmera dentro da geometria.
 
 - [ ] **5. Costuras entre níveis de LOD**
       Hoje resolvidas por saia. Em volume, exige algo como transvoxel, ou

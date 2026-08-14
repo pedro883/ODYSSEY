@@ -70,6 +70,7 @@ export function criarCampoDeDensidade(cfg, heightAt) {
   const nTunel = createNoise3D((cfg.seed + 8191) >>> 0);
   const nTunel2 = createNoise3D((cfg.seed + 8419) >>> 0);
   const nCamara = createNoise3D((cfg.seed + 9203) >>> 0);
+  const nBoca = createNoise3D((cfg.seed + 10357) >>> 0);
 
   const C = cfg.cavernas ?? PADRAO_CAVERNAS;
 
@@ -104,6 +105,20 @@ export function criarCampoDeDensidade(cfg, heightAt) {
     const folhaA = 1 - smoothstep(0, C.espessura, Math.abs(a));
     const folhaB = 1 - smoothstep(0, C.espessura, Math.abs(b));
     return folhaA * folhaB;
+  }
+
+  /**
+   * Intensidade da BOCA de caverna no ponto: 0 = teto selado, 1 = aberto.
+   *
+   * Frequência baixa e limiar alto: a boca precisa ser rara (para valer a pena
+   * procurar) e contígua (para ser uma abertura e não um crivo). O `smoothstep`
+   * estreito é o que dá borda de cratera em vez de um desvanecimento de
+   * quilômetros.
+   */
+  function intensidadeDaBoca(x, y, z) {
+    const f = C.freqBoca;
+    const v = nBoca(x * f, y * f, z * f);
+    return smoothstep(C.limiarBoca, C.limiarBoca + 0.12, v);
   }
 
   /** Câmaras: bolsões grandes, esparsos, que dão à caverna lugares "de parar". */
@@ -170,8 +185,24 @@ export function criarCampoDeDensidade(cfg, heightAt) {
     const profundidade = alturaSuperficie - dist;
     if (profundidade <= 0) return d;
 
+    // -------------------------------------------------------------------
+    // BOCAS: onde a margem de teto é suspensa, a caverna aflora.
+    //
+    // Sem isto as cavernas são habitáveis e inalcançáveis — `margemTeto` sela
+    // o teto em toda parte, de propósito, para que o ruído não abra fendas
+    // aleatórias sob os pés do jogador.
+    //
+    // A boca é um campo de baixa frequência com limiar alto: raro, contíguo, e
+    // do tamanho de uma cratera. Onde ele é forte, a margem de teto vai a zero
+    // e o túnel sobe até a superfície; onde é fraco, nada muda. É o que faz da
+    // entrada uma FEIÇÃO DO MAPA — algo que se procura e se reconhece de longe
+    // — em vez de um buraco que aparece por acidente.
+    // -------------------------------------------------------------------
+    const boca = C.bocas ? intensidadeDaBoca(x, y, z) : 0;
+    const margemTeto = C.margemTeto * (1 - boca);
+
     const abertura =
-      smoothstep(0, C.margemTeto, profundidade) *
+      smoothstep(0, Math.max(0.5, margemTeto), profundidade) *
       (1 - smoothstep(C.profundidadeMaxima - C.margemPiso, C.profundidadeMaxima, profundidade));
     if (abertura <= 0) return d;
 
@@ -236,6 +267,19 @@ export const PADRAO_CAVERNAS = {
   escala: 22,
   /** Rocha sólida preservada logo abaixo da superfície, em unidades. */
   margemTeto: 26,
+
+  /** Bocas de caverna: onde a margem de teto é suspensa e o túnel aflora. */
+  bocas: true,
+  /** Frequência do campo de bocas. Menor = bocas mais raras e maiores. */
+  freqBoca: 0.0016,
+  /**
+   * Limiar acima do qual há boca.
+   *
+   * Alto de propósito. Uma entrada de caverna deve ser algo que se PROCURA e se
+   * reconhece de longe; abaixar isto transforma a superfície num queijo e tira
+   * o valor de ter encontrado uma.
+   */
+  limiarBoca: 0.55,
   /** Até onde a rede desce, em unidades abaixo da superfície. */
   profundidadeMaxima: 420,
   margemPiso: 120,
