@@ -178,6 +178,29 @@ export class HUD {
    * do pulso produziriam um clarão só, justamente quando o jogador está sob o
    * ataque mais intenso e mais precisa do aviso.
    */
+  /**
+   * Nível de alerta das sentinelas.
+   *
+   * O DOM só é tocado quando o nível MUDA. Reescrever `textContent` a cada
+   * quadro obrigaria o navegador a refazer o layout do elemento sessenta vezes
+   * por segundo para desenhar exatamente as mesmas estrelas.
+   *
+   * @param {number} nivel 0..5
+   */
+  alerta(nivel) {
+    if (nivel === this._nivelAlerta) return;
+    this._nivelAlerta = nivel;
+
+    const el = document.getElementById('hud-alerta');
+    if (!el) return;
+
+    el.classList.toggle('off', nivel <= 0);
+    el.classList.toggle('grave', nivel >= 3);
+    if (nivel > 0) {
+      el.querySelector('.estrelas').textContent = '★'.repeat(nivel) + '☆'.repeat(5 - nivel);
+    }
+  }
+
   pulsarDano() {
     const el = this.bars.dano;
     if (!el) return;
@@ -200,6 +223,7 @@ export class HUD {
     // `toggle` com o segundo argumento não mexe no DOM quando o estado já é o
     // pedido, então isto pode rodar a cada quadro sem custo de reflow.
     this.bars.shield.classList.toggle('regen', !!data.escudoRegenerando);
+    this.alerta(data.alerta ?? 0);
     this.bars.atmo.style.width = `${(data.atmosphere * 100).toFixed(0)}%`;
 
     this.miningArc.style.strokeDashoffset =

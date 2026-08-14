@@ -149,6 +149,40 @@ body {
 .fill--shield   { background: linear-gradient(90deg, #227a52, var(--shield)); }
 .fill--health   { background: linear-gradient(90deg, #7a2222, var(--dano)); }
 
+/* --------------------------- Alerta de sentinela -------------------------- */
+
+#hud-alerta {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border: 1px solid rgba(255, 106, 94, 0.5);
+  border-radius: 3px;
+  background: rgba(30, 4, 4, 0.55);
+  color: var(--dano);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  pointer-events: none;
+  z-index: 39;
+}
+
+#hud-alerta.off { display: none; }
+
+#hud-alerta .estrelas { letter-spacing: 0.1em; font-size: 13px; }
+
+/* Pisca só a partir do nível 3: até lá o alerta informa, dali em diante ele
+   apressa. Piscar desde o primeiro nível gastaria o recurso cedo demais. */
+#hud-alerta.grave { animation: pulso-alerta 1s ease-in-out infinite; }
+
+@keyframes pulso-alerta {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
 /* ---------------------------- Clarão de dano ------------------------------ */
 
 /* Vinheta e não tela cheia: escurecer o centro tiraria a visão exatamente no

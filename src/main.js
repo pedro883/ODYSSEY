@@ -49,6 +49,7 @@ import { Vitais } from './game/Vitals.js';
 import { Projeteis } from './game/Weapons.js';
 import { Blaster } from './game/Blaster.js';
 import { EDICAO } from './shared/edits.js';
+import { Sentinelas } from './game/Sentinelas.js';
 
 /* ========================================================================== */
 /* Seed                                                                       */
@@ -227,6 +228,44 @@ const blaster = new Blaster(projeteis);
  */
 const jogadorComoDono = {};
 
+const sentinelas = new Sentinelas(engine.scene, projeteis);
+
+/**
+ * O jogador como ALVO, na mesma forma que a fauna e os drones.
+ *
+ * Poderia ser um caso especial dentro de `Projeteis` — "se o tiro é de um
+ * inimigo, testar contra o jogador" — e seria pior: passariam a existir duas
+ * regras de acerto, uma para o jogador e outra para todo o resto, livres para
+ * divergirem na primeira correção. Aqui o teste de segmento contra esfera é
+ * literalmente o mesmo.
+ *
+ * O `dono` é o que impede o jogador de levar o próprio tiro.
+ */
+const alvoJogador = {
+  posicao: new THREE.Vector3(),
+  raio: 0.85,
+  vitais: vitaisJogador,
+  dono: jogadorComoDono,
+};
+
+/** Lista única de alvos do quadro. Reaproveitada: roda a 60 Hz em combate. */
+const _alvos = [];
+function montarAlvos() {
+  _alvos.length = 0;
+  for (const a of activePlanet.fauna.alvos()) _alvos.push(a);
+  for (const a of sentinelas.alvos()) _alvos.push(a);
+
+  // A pé o alvo é o traje; pilotando, o casco — e o raio muda junto, porque
+  // acertar uma nave é bem mais fácil que acertar uma pessoa.
+  const aPe = mode === 'FOOT';
+  alvoJogador.posicao.copy(aPe ? playerController.position : ship.group.position);
+  alvoJogador.vitais = aPe ? vitaisJogador : vitaisNave;
+  alvoJogador.raio = aPe ? 0.85 : 2.4;
+  _alvos.push(alvoJogador);
+
+  return _alvos;
+}
+
 /**
  * O que acontece quando um tiro encosta em alguma coisa.
  *
@@ -275,9 +314,28 @@ projeteis.aoImpactar = (impacto) => {
     return;
   }
 
-  if (impacto.alvo) {
-    audio.collect();
-    if (impacto.morreu) hud.notify('CRIATURA ABATIDA', 1.4);
+  if (!impacto.alvo) return;
+
+  // O jogador levando tiro: o clarão é o único aviso, porque um projétil de
+  // drone vindo de trás não aparece na tela de jeito nenhum.
+  if (impacto.alvo === alvoJogador) {
+    hud.pulsarDano();
+    if (impacto.morreu) hud.notify('VOCÊ FOI ABATIDO', 3);
+    return;
+  }
+
+  audio.collect();
+  if (!impacto.morreu) return;
+
+  if (impacto.alvo.drone) {
+    // Espólio: peças de tecnologia. Abater sentinela tem de PAGAR, senão o
+    // jogador só evita o conflito e o sistema inteiro vira um imposto.
+    const ganho = inventory.add('ferrite', 2 + ((Math.random() * 3) | 0));
+    hud.notify(ganho ? 'SENTINELA DESTRUÍDA · +SUCATA' : 'SENTINELA DESTRUÍDA', 1.6);
+  } else {
+    hud.notify('CRIATURA ABATIDA', 1.4);
+    // Abater fauna é a infração mais pesada da lista. Ver `Sentinelas`.
+    sentinelas.registrarInfracao(0.5);
   }
 };
 
@@ -427,7 +485,10 @@ function inscreverNaOrigemFlutuante() {
     // objeto. Sem isto, cada recentragem lançaria todo tiro vivo a milhares de
     // unidades — e como o rebase acontece justamente ao voar rápido, o sintoma
     // apareceria só no combate de naves.
-    .onShift((delta) => projeteis.deslocar(delta));
+    .onShift((delta) => {
+      projeteis.deslocar(delta);
+      sentinelas.deslocar(delta);
+    });
 }
 
 inscreverNaOrigemFlutuante();
@@ -1356,6 +1417,11 @@ function saltarPara(sistema) {
       // sombras continuariam presas à luz da estrela que acabou de ser
       // descartada — e simplesmente sumiriam da cena.
       sombras.adotar(starSystem.sunLight);
+      // O alerta é de um SISTEMA, não do jogador: fugir num salto é uma saída
+      // legítima e cara (custa combustível de dobra), e mantê-lo pelo universo
+      // afora deixaria o jogador perseguido para sempre pelo que fez uma vez.
+      sentinelas.limpar();
+      projeteis.limpar();
       inscreverNaOrigemFlutuante();
       posicionarNaChegada();
 
@@ -1536,6 +1602,10 @@ function updateTools(dt) {
       multiplayer?.colheu(planetaId, alvo.key, alvo.index);
     }
     if (colheita) {
+      // Extrair chama a atenção, mas pouco: o peso é dez vezes menor que o de
+      // abater uma criatura, então minerar um depósito inteiro custa menos de
+      // meio nível. Punir a atividade central do jogo seria o erro óbvio aqui.
+      if (!colheita.cheio) sentinelas.registrarInfracao(0.05);
       if (colheita.cheio) hud.notify('CARGA CHEIA', 1.8);
       else {
         audio.collect();
@@ -1854,9 +1924,19 @@ engine.start((dt, elapsed) => {
     vitaisJogador.atualizar(dt);
     vitaisNave.atualizar(dt);
     blaster.atualizar(dt);
+    // As sentinelas ANTES dos projéteis: elas se movem e atiram, e o tiro
+    // disparado neste quadro deve andar no mesmo quadro. Invertido, todo tiro
+    // de drone ficaria um quadro parado na boca.
+    sentinelas.atualizar(
+      dt,
+      activePlanet,
+      mode === 'FOOT' ? playerController.position : ship.group.position,
+      jogadorComoDono,
+      gameState.altitude < 400
+    );
     // Os tiros avançam DEPOIS da física e ANTES da câmera: assim o impacto é
     // resolvido contra as posições deste quadro, e não contra as do anterior.
-    projeteis.atualizar(dt, activePlanet, activePlanet.fauna.alvos());
+    projeteis.atualizar(dt, activePlanet, montarAlvos());
   }
 
   if (started) checkPlanetDiscovery(activePlanet, gameState.altitude);
@@ -2081,6 +2161,8 @@ engine.start((dt, elapsed) => {
     shield: mode === 'FOOT' ? vitaisJogador.razaoEscudo : vitaisNave.razaoEscudo,
     health: mode === 'FOOT' ? vitaisJogador.razaoVida : vitaisNave.razaoVida,
     escudoRegenerando: mode === 'FOOT' ? vitaisJogador.regenerando : vitaisNave.regenerando,
+    alerta: sentinelas.nivel,
+    sentinelas: sentinelas.ativas,
     atmosphere: gameState.atmosphere,
     miningProgress: scanner.miningProgress,
     units: inventory.units,
@@ -2150,6 +2232,7 @@ window.__nms = {
   gameState, inventory, discovery, scanner, seed: SEED, cloudQuality, audio,
   floatingOrigin, multiplayer, build, terraform, viewModel, galaxyMap, warp, weather,
   vitaisJogador, vitaisNave, sombras, ceuAmbiente, projeteis, blaster, jogadorComoDono, hud,
+  sentinelas, alvoJogador, montarAlvos,
   saltarPara, alternarMapa,
   get ferramenta() { return ferramentaAtual(); },
   equipar,
