@@ -18,6 +18,7 @@
 
 import * as THREE from 'three';
 import { AerialPerspective } from '../shaders/AerialPerspective.js';
+import { PostProcess } from '../shaders/PostProcess.js';
 
 export class Engine {
   /** @param {HTMLCanvasElement} canvas */
@@ -111,6 +112,30 @@ export class Engine {
       this.renderer.toneMapping = THREE.NoToneMapping;
     }
 
+    // -----------------------------------------------------------------------
+    // PÓS-PROCESSAMENTO
+    //
+    // Depende do mesmo alvo linear da perspectiva aérea: bloom sobre cor já
+    // comprimida não tem para onde crescer. Por isso ele acompanha
+    // `aerialEnabled` em vez de ter um interruptor próprio de capacidade — e
+    // `?post=off` existe para comparar lado a lado, que é como se julga se um
+    // efeito está ajudando ou só embaçando.
+    // -----------------------------------------------------------------------
+    const semPost = new URLSearchParams(location.search).get('post') === 'off';
+    this.postEnabled = this.aerialEnabled && !semPost;
+    if (this.postEnabled) {
+      this.post = new PostProcess();
+      this.aerial.uniforms.uSaidaLinear.value = 1;
+
+      // Segundo alvo: a saída da perspectiva aérea, ainda linear. Não dá para
+      // escrever no mesmo alvo que se está lendo.
+      this.alvoComposto = new THREE.WebGLRenderTarget(1, 1, {
+        type: THREE.HalfFloatType,
+        depthBuffer: false,
+        stencilBuffer: false,
+      });
+    }
+
     this._onResize = () => this.resize();
     window.addEventListener('resize', this._onResize);
     this.resize();
@@ -135,7 +160,11 @@ export class Engine {
     // janela numa tela 2x renderizaria a cena em metade da resolução.
     if (this.renderTarget) {
       const ratio = this.renderer.getPixelRatio();
-      this.renderTarget.setSize(Math.round(width * ratio), Math.round(height * ratio));
+      const l = Math.round(width * ratio);
+      const a = Math.round(height * ratio);
+      this.renderTarget.setSize(l, a);
+      this.alvoComposto?.setSize(l, a);
+      this.post?.redimensionar(l, a);
     }
   }
 
@@ -205,7 +234,18 @@ export class Engine {
     // salto, que precisa cobrir tanto o mapa quanto o mundo.
     // -----------------------------------------------------------------------
     if (this.mapa?.aberto) {
-      this.renderer.render(this.mapa.scene, this.mapa.camera);
+      // O mapa também passa pelo pós-processamento, e é onde ele mais aparece:
+      // 24 mil estrelas em blending aditivo são exatamente o tipo de fonte
+      // pontual que o bloom existe para espalhar. Sem atmosfera nenhuma no
+      // meio, a cena vai direto do alvo para a composição.
+      if (this.postEnabled) {
+        this.renderer.setRenderTarget(this.renderTarget);
+        this.renderer.render(this.mapa.scene, this.mapa.camera);
+        this.renderer.setRenderTarget(null);
+        this.post.render(this.renderer, this.renderTarget.texture, this.renderer.toneMappingExposure);
+      } else {
+        this.renderer.render(this.mapa.scene, this.mapa.camera);
+      }
       this._renderOverlay();
       return;
     }
@@ -220,14 +260,29 @@ export class Engine {
 
     this.renderer.setRenderTarget(this.renderTarget);
     this.renderer.render(this.scene, this.camera);
-    this.renderer.setRenderTarget(null);
 
-    this.aerial.render(
-      this.renderer,
-      this.renderTarget.texture,
-      this.renderTarget.depthTexture,
-      this.renderer.toneMappingExposure
-    );
+    if (this.postEnabled) {
+      // Perspectiva aérea -> segundo alvo (ainda linear) -> bloom e composição.
+      // Não dá para o passe escrever no mesmo alvo que está lendo.
+      this.renderer.setRenderTarget(this.alvoComposto);
+      this.aerial.render(
+        this.renderer,
+        this.renderTarget.texture,
+        this.renderTarget.depthTexture,
+        this.renderer.toneMappingExposure
+      );
+      this.renderer.setRenderTarget(null);
+      this.post.render(this.renderer, this.alvoComposto.texture, this.renderer.toneMappingExposure);
+    } else {
+      this.renderer.setRenderTarget(null);
+      this.aerial.render(
+        this.renderer,
+        this.renderTarget.texture,
+        this.renderTarget.depthTexture,
+        this.renderer.toneMappingExposure
+      );
+    }
+
     this._renderOverlay();
   }
 
@@ -258,7 +313,9 @@ export class Engine {
     this.timer.disconnect();
     window.removeEventListener('resize', this._onResize);
     this.aerial.dispose();
+    this.post?.dispose();
     this.renderTarget?.dispose();
+    this.alvoComposto?.dispose();
     this.renderer.dispose();
   }
 }

@@ -37,8 +37,35 @@ async function rodar(quadros, aoRodar) {
   }
 }
 
+/**
+ * Garante um tamanho de canvas para a foto.
+ *
+ * O painel do navegador pode estar oculto, e aí `innerWidth/innerHeight` valem
+ * ZERO: o `resize` do Engine dimensiona o canvas para 0×0 e `toDataURL` devolve
+ * `data:,` — um arquivo vazio, sem erro nenhum no console. Perdi um ensaio
+ * inteiro nisso.
+ */
+export function enquadrar(largura = 1280, altura = 720) {
+  const e = window.__nms.engine;
+  const cv = e.renderer.domElement;
+  if (cv.width === largura && cv.height === altura) return;
+
+  e.renderer.setSize(largura, altura, false);
+  e.camera.aspect = largura / altura;
+  e.camera.updateProjectionMatrix();
+
+  const ratio = e.renderer.getPixelRatio();
+  const l = Math.round(largura * ratio);
+  const a = Math.round(altura * ratio);
+  e.renderTarget?.setSize(l, a);
+  e.alvoComposto?.setSize(l, a);
+  e.post?.redimensionar(l, a);
+  window.__nms.galaxyMap.redimensionar(largura / altura);
+}
+
 async function enviar(nome) {
   const n = window.__nms;
+  enquadrar();
   n.engine.render();
   const url = n.engine.renderer.domElement.toDataURL('image/jpeg', 0.82);
   await fetch('/__captura/' + nome, { method: 'POST', body: url });

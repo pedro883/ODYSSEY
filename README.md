@@ -1370,6 +1370,52 @@ para editar direto no gerenciador de arquivos, sem recompilar:
 > agora detecta essa combinação e explica no console, porque o sintoma sozinho
 > (sala eternamente OFFLINE) não aponta para a causa.
 
+### 3.16.1 Pós-processamento
+
+`src/shaders/PostProcess.js` fecha o pipeline: bloom, exposição, tone mapping,
+saturação, contraste, vinheta e grão.
+
+Ele só existe porque o passe de perspectiva aérea (§3.6.3) já tinha feito o
+trabalho difícil — renderizar a cena num alvo **linear** com o tone mapping
+desligado. Bloom precisa exatamente disso: somar um halo a um pixel já
+comprimido para [0,1] não tem para onde crescer, e o brilho vira uma mancha
+acinzentada. O tone mapping **saiu** da perspectiva aérea e passou a ser a
+última coisa que acontece:
+
+```
+cena -> alvo HDR linear
+     -> perspectiva aérea (soma espalhamento, sem comprimir)
+     -> extração de brilho + borrão em cascata (4 níveis, meia resolução)
+     -> composição: soma o bloom, expõe, comprime, tinge, vinheta, grão
+     -> tela
+```
+
+Decisões que valem nota:
+
+- **Cascata, não um borrão só.** Um Gaussiano largo o bastante para o halo de um
+  sol custa dezenas de amostras por pixel; borrar em resoluções decrescentes e
+  somar de volta dá o mesmo alcance com um punhado, porque cada nível cobre o
+  dobro da distância — o pixel dele é o dobro do tamanho. O borrão separável usa
+  cinco leituras para cobrir nove texels, deixando a interpolação bilinear da
+  GPU fazer metade do trabalho.
+- **Joelho na extração de brilho.** Um corte duro no limiar faz um pixel que
+  oscila em torno dele entrar e sair do bloom a cada quadro, e a imagem pisca em
+  movimento.
+- **Contraste com pivô em 0.42 e levante de sombra.** Com pivô no meio, uma
+  floresta densa perdia a folhagem escura inteira para o preto: mais dramático
+  numa captura parada, ilegível em movimento.
+- **Grão mascarado por luminância.** Ele existe para quebrar o *banding* de
+  degradês grandes (céu, névoa, água profunda) que 8 bits por canal não
+  resolvem. Sem a máscara, o preto do espaço no mapa galáctico ficava
+  chuviscando — ruído onde não há sinal nenhum para proteger.
+- **O mapa galáctico passa pelo mesmo caminho**, e é onde o efeito mais aparece:
+  24 mil estrelas em blending aditivo são a fonte pontual que o bloom existe
+  para espalhar.
+
+Custo medido: **1,4 ms por quadro** a 1280×720 (5,7 ms contra 4,3 ms).
+`?post=off` desliga tudo e volta ao caminho anterior, com o tone mapping de novo
+dentro do passe atmosférico — é assim que se compara lado a lado.
+
 ### 3.17.1 Ver o que o jogo está desenhando
 
 Um endpoint `/__captura` no `vite.config.js` (só em `serve`) recebe um quadro do
@@ -1469,6 +1515,7 @@ antes de usá-lo.
 | `?spawn=superficie\|alto\|orbita` + `&planet=N` | nasce direto na situação, pulando a abertura |
 | `?clouds=off\|minimo\|baixo\|medio\|alto` | fixa a qualidade das nuvens |
 | `?aerial=off` | volta ao pipeline de cor antigo (§3.6.3) |
+| `?post=off` | desliga o pós-processamento (§3.16.1), para comparar lado a lado |
 | `?dev=1` | instala a bancada de inspeção em `window.__dev` (só em `npm run dev`) |
 
 `M` liga/desliga o som (fica salvo). `F3` alterna wireframe (mostra a quadtree
@@ -1495,8 +1542,9 @@ cursor. No console: `__nms.activePlanet`, `__nms.inventory`, `__nms.disembark()`
   e o stride do worker.
 - **Estações espaciais e comércio**: o inventário já tem `sell()` e valores de
   mercado; falta o destino onde vender.
-- **Pós-processamento**: bloom, correção de cor e vinheta sobre o passe de tela
-  cheia que já existe (§3.6.3). É o maior ganho visual por esforço que resta.
+- **Nuvens sem banding**: a casca é amostrada em passos grandes e a borda mostra
+  dithering em algumas altitudes (ver §6). Passos adaptativos por distância
+  resolveriam sem custar em toda a tela.
 - **LUTs de espalhamento pré-computadas** (modelo de Bruneton): o pass de
   profundidade já existe (§3.6.3), mas ainda integra por marcha a cada frame.
 - **WebGPU**: exige importar de `three/webgpu` e reescrever os shaders em
@@ -1525,8 +1573,6 @@ cursor. No console: `__nms.activePlanet`, `__nms.inventory`, `__nms.disembark()`
   (§3.4), o defeito ficou limpo e visível. A correção troca a identidade pela
   CÉLULA do espalhamento e mexe no protocolo e no significado das colunas de
   `colhido`.
-- **Sem pós-processamento.** Nada de bloom, correção de cor ou vinheta. O
-  `Engine` já tem um passe de tela cheia (§3.6.3), então há onde encaixar.
 - **Nuvens com aspecto quadriculado** em algumas altitudes: a casca é amostrada
   em passos grandes e a borda mostra dithering.
 - **O terreno deformado é compartilhado e permanente**, diferente do jogo do

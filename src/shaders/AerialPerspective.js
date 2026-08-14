@@ -97,6 +97,7 @@ const fragmentShader = /* glsl */ `
 
   uniform float uStrength;       // 0 = fora da atmosfera, 1 = bem dentro
   uniform float uExposure;
+  uniform float uSaidaLinear;  // 1 = entrega radiancia crua para o pos-processamento
   uniform int   uDebug;          // 1 = mostra a distância reconstruída
   uniform float uDebugScale;     // unidades por branco total, no modo acima
   uniform float uBoost;          // escala de jogo da profundidade óptica
@@ -255,6 +256,22 @@ const fragmentShader = /* glsl */ `
     // Three produzia quando ele morava dentro de cada material.
     if (uDebug == 4) { gl_FragColor = vec4(color, 1.0); return; }
 
+    // -----------------------------------------------------------------------
+    // SAÍDA LINEAR quando há pós-processamento depois daqui.
+    //
+    // O bloom precisa de radiância CRUA: somar um halo a um pixel já comprimido
+    // para [0,1] não tem para onde crescer, e o brilho vira uma mancha
+    // acinzentada. Com uSaidaLinear ligado, este passe entrega a cena como ela
+    // é e quem expõe, comprime e converte para sRGB é o PostProcess.
+    //
+    // Sem pós-processamento (WebGL1, ?post=off), o caminho antigo continua
+    // valendo — este passe é o último da fila e fecha a conta aqui mesmo.
+    // -----------------------------------------------------------------------
+    if (uSaidaLinear > 0.5) {
+      gl_FragColor = vec4(color, 1.0);
+      return;
+    }
+
     color *= uExposure;
     color = neutralToneMapping(color);
     gl_FragColor = vec4(color, 1.0);
@@ -284,6 +301,7 @@ export class AerialPerspective {
       uMieG: { value: 0.76 },
       uStrength: { value: 0 },
       uExposure: { value: 1 },
+      uSaidaLinear: { value: 0 },
       uDebug: { value: 0 },
       uDebugScale: { value: 4000 },
       // Calibrado por medição: ver a tabela de transmitância no README.
