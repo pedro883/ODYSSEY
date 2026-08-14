@@ -43,6 +43,8 @@ import { audio } from './audio/AudioEngine.js';
 import { FloatingOrigin } from './core/FloatingOrigin.js';
 import { Multiplayer } from './net/Multiplayer.js';
 import { Weather, CLIMAS } from './world/Weather.js';
+import { SombrasDoSol } from './world/Sombras.js';
+import { CeuAmbiente } from './world/CeuAmbiente.js';
 
 /* ========================================================================== */
 /* Seed                                                                       */
@@ -192,6 +194,8 @@ const warpLines = new WarpLines(engine.scene);
 
 const gameState = new GameState(engine, starSystem);
 const weather = new Weather(engine.scene, gameState);
+const sombras = new SombrasDoSol(engine.renderer, starSystem.sunLight);
+const ceuAmbiente = new CeuAmbiente(engine.renderer, engine.scene);
 const inventory = new Inventory();
 const discovery = new Discovery();
 const scanner = new Scanner(engine.scene);
@@ -1229,6 +1233,10 @@ function saltarPara(sistema) {
      */
     aoTrocar: () => {
       starSystem.recriar(sistema.seed);
+      // A direcional do sistema novo é outro objeto: sem reinscrever, as
+      // sombras continuariam presas à luz da estrela que acabou de ser
+      // descartada — e simplesmente sumiriam da cena.
+      sombras.adotar(starSystem.sunLight);
       inscreverNaOrigemFlutuante();
       posicionarNaChegada();
 
@@ -1596,6 +1604,7 @@ function restaurarPosicao(estado) {
   // destruiria os planetas debaixo dele e o deixaria caindo no vazio.
   if (typeof estado.sistema === 'number' && estado.sistema !== starSystem.seed) {
     starSystem.recriar(estado.sistema);
+    sombras.adotar(starSystem.sunLight);
     inscreverNaOrigemFlutuante();
     build.esquecerTudo();
   }
@@ -1732,6 +1741,14 @@ engine.start((dt, elapsed) => {
       engine.camera.position.distanceTo(activePlanet.group.position)
     );
   }
+
+  // 5.3 Sombras --------------------------------------------------------------
+  // Depois do rebase e da câmera, pelo mesmo motivo da perspectiva aérea: a
+  // caixa de sombra é posicionada em coordenadas de CENA e um frame de atraso a
+  // deixaria deslocada exatamente pelo tamanho do salto de recentragem — o que
+  // se veria como a sombra inteira escorregando no chão a cada rebase.
+  sombras.atualizar(engine.camera, starSystem.sunDirection, gameState.altitude, gameState.up);
+  ceuAmbiente.atualizar(activePlanet.config, gameState, starSystem.sunDirection, gameState.up, dt);
 
   // 6. LOD + fila de geração ----------------------------------------------
   // A qualidade das nuvens vem ANTES do LOD dos planetas porque é lá que ela

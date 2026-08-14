@@ -300,6 +300,14 @@ export class ChunkManager {
     geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), payload.boundingRadius);
 
     const mesh = new THREE.Mesh(geometry, this.material);
+    // O terreno é ao mesmo tempo o maior receptor e um projetor indispensável:
+    // sem `castShadow` a encosta oeste de uma montanha fica iluminada ao
+    // entardecer como se o pico ao lado não existisse, e é justamente a sombra
+    // longa do relevo que dá escala à paisagem. O custo é contido porque a
+    // câmera de sombra é uma caixa pequena (ver `Sombras.js`) e o three descarta
+    // por frustum os chunks fora dela.
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
     mesh.position.fromArray(payload.center);
     // Chunks nunca se movem depois de criados: dispensa recalcular a matriz
     // local em todo frame (economia real quando há centenas deles).

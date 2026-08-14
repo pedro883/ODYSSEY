@@ -1416,6 +1416,102 @@ Custo medido: **1,4 ms por quadro** a 1280×720 (5,7 ms contra 4,3 ms).
 `?post=off` desliga tudo e volta ao caminho anterior, com o tone mapping de novo
 dentro do passe atmosférico — é assim que se compara lado a lado.
 
+### 3.16.2 Sombras do sol
+
+A luz do sol é direcional, e o mapa de sombra de uma direcional é uma câmera
+ortográfica: a resolução da sombra é o tamanho da caixa dividido pelo tamanho do
+mapa. Uma caixa que contivesse o planeta — 30 000 unidades — daria **quinze
+metros por texel** num mapa de 2048. Nenhuma árvore projetaria nada.
+
+Por isso a caixa segue o **jogador**, não o planeta: 170 unidades de meia-aresta
+ao redor da câmera, empurradas 40% do raio na direção do olhar (metade da caixa
+atrás do observador é volume gasto). Dá ~0,17 unidade por texel — sombra de
+galho. `src/world/Sombras.js`.
+
+Três detalhes sem os quais isso não funciona:
+
+- **Encaixe na grade de texels.** Mover o centro por uma fração de texel remapeia
+  a que texel cada ponto do mundo pertence, e a borda de toda sombra da tela
+  reamostra a cada quadro. O sintoma é a sombra *fervendo* ao andar devagar —
+  justamente o caso que deveria ser o mais calmo. O centro é arredondado para um
+  múltiplo inteiro de texel nos eixos da câmera de sombra.
+- **A luz virtual fica a 900 unidades, não a 60 000.** Como a projeção é
+  ortográfica, só a direção importa: aproximar não muda uma única sombra e
+  devolve toda a precisão do depth buffer da sombra.
+- **`normalBias` de 0,65 fazendo o trabalho, `bias` quase zerado.** Um `bias`
+  grande o bastante para o terreno rasante descolaria a sombra do pé da árvore
+  (*peter-panning*); empurrar ao longo da normal é proporcional ao erro real de
+  um texel e não descola nada.
+
+Desvanece nas duas pontas — sol rasante (as sombras ficariam mais longas que a
+caixa e entrariam e sairiam dela conforme o jogador anda) e altitude, onde não há
+o que projetar. Acima de 900 unidades `castShadow` vai a falso e o three deixa de
+percorrer a cena pela câmera de sombra: no espaço o custo volta inteiro.
+
+Medido: **0,6 ms por quadro** perto do solo (1,7 ms contra 1,1 ms).
+`?sombras=off` desliga.
+
+### 3.16.3 Ambiente por imagem (IBL)
+
+`MeshStandardMaterial` **sem `envMap` não tem reflexo especular do ambiente** —
+só o do sol. Um metal não tem cor difusa nenhuma; ele é feito só de reflexo.
+Então o casco da nave, com `metalness: 0.85`, era literalmente um cinza morto com
+um pontinho de brilho. A hemisférica que havia antes não resolve: ela devolve uma
+cor para cima e outra para baixo, sem nenhuma noção de direção no meio.
+
+`src/world/CeuAmbiente.js` desenha um céu procedural (gradiente zênite →
+horizonte → chão, mais o disco solar) numa cena minúscula e passa pelo
+`PMREMGenerator`. A partir daí **todo** material padrão da cena — terreno, props,
+nave, peças de construção — recebe ambiente direcional sem nenhuma alteração nos
+materiais.
+
+- A pré-filtragem custa alguns milissegundos, então o mapa só é refeito quando as
+  entradas se afastam do que gerou o atual: algumas vezes por minuto durante o
+  ciclo dia/noite, nenhuma com o sol parado.
+- A direção do sol entra em espaço **local**: "para cima" na superfície é a normal
+  do terreno, não o eixo Y do mundo. Sem converter, o céu do IBL estaria deitado
+  em qualquer ponto que não fosse o polo norte.
+- A hemisférica caiu para **um terço** do valor antigo. Manter as duas somaria o
+  preenchimento duas vezes, e luz ambiente é exatamente o que apaga a sombra
+  recém-conquistada.
+
+### 3.16.4 Textura procedural do terreno, e um erro de escala
+
+O terreno tem cor por vértice, e entre vértices o rasterizador só interpola — daí
+o aspecto de chapa lisa. `src/shaders/SurfaceDetail.js` injeta variação em três
+escalas no `MeshStandardMaterial` via `onBeforeCompile`:
+
+| escala | tamanho | desvanece |
+|---|---|---|
+| grão | ~3 e ~12 unidades | 120 → 700 |
+| meso | ~50 unidades | 2 500 → 6 000 |
+| macro | ~450 unidades | nunca |
+
+O macro é o que faltava: o grão resolve o pixel a dois metros do olho e some a
+700 unidades (mais que isso vira chiado que cintila), mas a paisagem vista de
+cima é quase toda feita do que está além disso — e ali não sobrava variação
+nenhuma. A esta escala uma feição continua tendo dezenas de pixels mesmo do alto
+da atmosfera.
+
+A variação vai quase toda para **saturação e matiz**, e só um pouco para o
+brilho: mancha clara/escura em alta frequência o olho lê como sujeira, não como
+material. Há também variação de **rugosidade**, que separa duas manchas de mesma
+cor assim que o sol rasa.
+
+> **O erro que custou três rodadas de captura.** Todo ajuste escalava
+> `(_fbm - 0.5)` por uma força, e eu tratava esse termo como se cobrisse
+> [-0,5, 0,5]. Não cobre: ruído de valor já se concentra perto de 0,5, e a soma
+> ponderada de três oitavas concentra mais ainda — a excursão real fica em torno
+> de ±0,17. Era um multiplicador silencioso de **um terço** sobre cada número
+> calibrado, e eu passei três rodadas convencido de que o problema estava na
+> fórmula de cor. A função `_var` leva a excursão a [-1, 1] e faz cada força
+> significar de fato a fração do efeito no seu pico. É o mesmo engano de
+> concentração central que já tinha aparecido na mistura de umidade dos biomas.
+
+Os uniformes ficam expostos em `material.userData.detalhe` para calibração ao
+vivo — sem isso, ajustar qualquer número exige recarregar e esperar o mundo
+inteiro reaparecer, que é calibrar no escuro.
+
 ### 3.17.1 Ver o que o jogo está desenhando
 
 Um endpoint `/__captura` no `vite.config.js` (só em `serve`) recebe um quadro do
@@ -1516,6 +1612,7 @@ antes de usá-lo.
 | `?clouds=off\|minimo\|baixo\|medio\|alto` | fixa a qualidade das nuvens |
 | `?aerial=off` | volta ao pipeline de cor antigo (§3.6.3) |
 | `?post=off` | desliga o pós-processamento (§3.16.1), para comparar lado a lado |
+| `?sombras=off` | desliga as sombras do sol (§3.16.2) |
 | `?dev=1` | instala a bancada de inspeção em `window.__dev` (só em `npm run dev`) |
 
 `M` liga/desliga o som (fica salvo). `F3` alterna wireframe (mostra a quadtree
