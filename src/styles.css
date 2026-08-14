@@ -149,6 +149,31 @@ body {
 .fill--shield   { background: linear-gradient(90deg, #227a52, var(--shield)); }
 .fill--health   { background: linear-gradient(90deg, #7a2222, var(--dano)); }
 
+/* ---------------------------- Clarão de dano ------------------------------ */
+
+/* Vinheta e não tela cheia: escurecer o centro tiraria a visão exatamente no
+   momento em que o jogador mais precisa dela — que é quando está apanhando. */
+#hud-dano {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 40;
+  background: radial-gradient(ellipse at center,
+    rgba(255, 40, 30, 0) 42%,
+    rgba(255, 30, 24, 0.42) 100%);
+}
+
+/* A animação é reiniciada removendo e readicionando a classe (ver
+   `HUD.pulsarDano`): sem isso, duas mordidas seguidas dentro da duração do
+   pulso não produziriam clarão nenhum na segunda. */
+#hud-dano.bater { animation: clarao-dano 0.45s ease-out; }
+
+@keyframes clarao-dano {
+  0%   { opacity: 0.95; }
+  100% { opacity: 0; }
+}
+
 /* O escudo subindo tem de se distinguir do escudo parado: sem isso o jogador
    não sabe se vale esperar mais dois segundos ou correr. A transição de largura
    já está no `.fill`, então basta o pulso. */

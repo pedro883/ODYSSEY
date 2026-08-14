@@ -280,6 +280,35 @@ projeteis.aoImpactar = (impacto) => {
     if (impacto.morreu) hud.notify('CRIATURA ABATIDA', 1.4);
   }
 };
+
+/**
+ * Inscreve o retorno de ataque da fauna do planeta ativo.
+ *
+ * Precisa ser reinscrito, e não feito uma vez no boot: cada planeta tem sua
+ * própria instância de `Fauna`, e o jogador troca de corpo sem que nada aqui
+ * seja reconstruído. Sem isto, pousar na segunda lua daria criaturas que
+ * perseguem e mordem sem nunca tirar um ponto de vida.
+ *
+ * A guarda de identidade evita reatribuir a mesma função a cada quadro.
+ */
+let faunaInscrita = null;
+function ligarAtaquesDaFauna(planeta) {
+  if (faunaInscrita === planeta.fauna) return;
+  faunaInscrita = planeta.fauna;
+
+  planeta.fauna.aoAtacar = (dano) => {
+    // Dentro da nave o jogador não é mordido: o casco é que apanha. Sem esta
+    // distinção, pousar no meio de uma matilha drenaria o traje através de duas
+    // toneladas de blindagem.
+    const alvo = mode === 'FOOT' ? vitaisJogador : vitaisNave;
+    const golpe = alvo.aplicarDano(dano, 'fauna');
+    if (golpe.vida > 0 || golpe.escudo > 0) {
+      audio.terraform(true);
+      hud.pulsarDano?.();
+    }
+    if (golpe.letal) hud.notify('VOCÊ FOI ABATIDO', 3);
+  };
+}
 const inventory = new Inventory();
 const discovery = new Discovery();
 const scanner = new Scanner(engine.scene);
@@ -1889,7 +1918,12 @@ engine.start((dt, elapsed) => {
   // própria checagem de altitude quando o jogador se afastou.
   if (faunaPlanet && faunaPlanet !== activePlanet) faunaPlanet.fauna.despawnAll();
   faunaPlanet = activePlanet;
-  if (started) activePlanet.fauna.update(dt, _reference, gameState.altitude);
+  if (started) {
+    // O fator dia decide quais espécies podem nascer: as noturnas só saem com o
+    // sol abaixo do horizonte (ver `Fauna.update`).
+    activePlanet.fauna.update(dt, _reference, gameState.altitude, gameState.dayFactor);
+    ligarAtaquesDaFauna(activePlanet);
+  }
 
   // O clima vem depois da câmera e do rebase: as partículas vivem num grupo
   // ancorado na posição de CENA da câmera deste frame, e usá-la antes do
@@ -2115,7 +2149,7 @@ window.__nms = {
   engine, starSystem, ship, shipController, playerController,
   gameState, inventory, discovery, scanner, seed: SEED, cloudQuality, audio,
   floatingOrigin, multiplayer, build, terraform, viewModel, galaxyMap, warp, weather,
-  vitaisJogador, vitaisNave, sombras, ceuAmbiente, projeteis, blaster, jogadorComoDono,
+  vitaisJogador, vitaisNave, sombras, ceuAmbiente, projeteis, blaster, jogadorComoDono, hud,
   saltarPara, alternarMapa,
   get ferramenta() { return ferramentaAtual(); },
   equipar,

@@ -62,6 +62,7 @@ export class HUD {
       jetpack: el('hud-jetpack'),
       shield: el('hud-shield'),
       health: el('hud-health'),
+      dano: el('hud-dano'),
       atmo: el('hud-atmo'),
     };
 
@@ -166,6 +167,23 @@ export class HUD {
     if (this._cache[key] === value) return;
     this._cache[key] = value;
     this.fields[key].textContent = value;
+  }
+
+  /**
+   * Clarão vermelho ao levar dano.
+   *
+   * A classe é REMOVIDA e readicionada com um reflow forçado no meio. Só
+   * readicionar não funciona: se a classe já está lá, o navegador não considera
+   * que houve mudança e a animação não reinicia — duas mordidas dentro dos 0,45 s
+   * do pulso produziriam um clarão só, justamente quando o jogador está sob o
+   * ataque mais intenso e mais precisa do aviso.
+   */
+  pulsarDano() {
+    const el = this.bars.dano;
+    if (!el) return;
+    el.classList.remove('bater');
+    void el.offsetWidth; // força o reflow que valida a remoção
+    el.classList.add('bater');
   }
 
   /**

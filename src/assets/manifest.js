@@ -136,13 +136,24 @@ export const FAUNA_SPECIES = [
   { path: 'fauna/animal-caterpillar.glb', altura: 0.6, velocidade: 0.5, nome: 'larval' },
   // `voa` faz a criatura pairar acima do solo em vez de colar nele.
   { path: 'fauna/animal-parrot.glb',      altura: 0.9, velocidade: 1.3, nome: 'alado', voa: true },
-  { path: 'fauna/animal-bee.glb',         altura: 0.5, velocidade: 1.6, nome: 'enxame', voa: true },
+  // ---------------------------------------------------------------------------
+  // `agressivo` e `noturno` (ver `Fauna.js`)
+  //
+  // `agressivo`: detecta o jogador de longe, persegue e ataca ao encostar. Só
+  // TRÊS espécies de dez, e é de propósito — se a maioria caçasse, andar a pé
+  // viraria combate contínuo e a exploração, que é o miolo do jogo, sumiria.
+  //
+  // `noturno`: só nasce com o sol abaixo do horizonte. Dá ao ciclo dia/noite uma
+  // consequência de jogo, e não apenas de iluminação.
+  // ---------------------------------------------------------------------------
+  { path: 'fauna/animal-bee.glb',         altura: 0.5, velocidade: 1.6, nome: 'enxame', voa: true, agressivo: true, dano: 4, cadencia: 0.7 },
   { path: 'fauna/animal-deer.glb',        altura: 1.9, velocidade: 1.2, nome: 'herbívoro' },
-  { path: 'fauna/animal-fox.glb',         altura: 1.1, velocidade: 1.4, nome: 'predador' },
+  { path: 'fauna/animal-fox.glb',         altura: 1.1, velocidade: 1.4, nome: 'predador', agressivo: true, dano: 11, cadencia: 1.1 },
   { path: 'fauna/animal-penguin.glb',     altura: 1.2, velocidade: 0.8, nome: 'bípede' },
   { path: 'fauna/animal-elephant.glb',    altura: 3.2, velocidade: 0.6, nome: 'colossal' },
   { path: 'fauna/animal-giraffe.glb',     altura: 4.0, velocidade: 0.9, nome: 'longilíneo' },
   { path: 'fauna/animal-koala.glb',       altura: 1.0, velocidade: 0.7, nome: 'arborícola' },
+  { path: 'fauna/animal-crab.glb',        altura: 1.4, velocidade: 1.1, nome: 'noturno', agressivo: true, noturno: true, dano: 15, cadencia: 1.3 },
 ];
 
 /**
