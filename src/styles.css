@@ -8,6 +8,7 @@
   --accent-dim: #1c6d7d;
   --warn: #ffb44d;
   --shield: #6cf0a8;
+  --dano: #ff6a5e;
   --jet: #a98bff;
   --gold: #ffd77a;
   --bg-panel: rgba(4, 12, 20, 0.55);
@@ -146,6 +147,17 @@ body {
 
 .fill--throttle { background: linear-gradient(90deg, var(--accent-dim), var(--accent)); }
 .fill--shield   { background: linear-gradient(90deg, #227a52, var(--shield)); }
+.fill--health   { background: linear-gradient(90deg, #7a2222, var(--dano)); }
+
+/* O escudo subindo tem de se distinguir do escudo parado: sem isso o jogador
+   não sabe se vale esperar mais dois segundos ou correr. A transição de largura
+   já está no `.fill`, então basta o pulso. */
+.fill--shield.regen { animation: pulso-escudo 0.9s ease-in-out infinite; }
+
+@keyframes pulso-escudo {
+  0%, 100% { filter: brightness(1); }
+  50%      { filter: brightness(1.7); }
+}
 .fill--atmo     { background: linear-gradient(90deg, #7a4b16, var(--warn)); }
 .fill--jetpack  { background: linear-gradient(90deg, #4b3b86, var(--jet)); }
 

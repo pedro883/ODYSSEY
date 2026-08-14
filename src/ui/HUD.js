@@ -61,6 +61,7 @@ export class HUD {
       throttle: el('hud-throttle'),
       jetpack: el('hud-jetpack'),
       shield: el('hud-shield'),
+      health: el('hud-health'),
       atmo: el('hud-atmo'),
     };
 
@@ -177,6 +178,10 @@ export class HUD {
     this.bars.throttle.style.width = `${(data.throttle * 100).toFixed(0)}%`;
     this.bars.jetpack.style.width = `${(data.jetpack * 100).toFixed(0)}%`;
     this.bars.shield.style.width = `${(data.shield * 100).toFixed(0)}%`;
+    this.bars.health.style.width = `${(data.health * 100).toFixed(0)}%`;
+    // `toggle` com o segundo argumento não mexe no DOM quando o estado já é o
+    // pedido, então isto pode rodar a cada quadro sem custo de reflow.
+    this.bars.shield.classList.toggle('regen', !!data.escudoRegenerando);
     this.bars.atmo.style.width = `${(data.atmosphere * 100).toFixed(0)}%`;
 
     this.miningArc.style.strokeDashoffset =

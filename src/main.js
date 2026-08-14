@@ -45,6 +45,7 @@ import { Multiplayer } from './net/Multiplayer.js';
 import { Weather, CLIMAS } from './world/Weather.js';
 import { SombrasDoSol } from './world/Sombras.js';
 import { CeuAmbiente } from './world/CeuAmbiente.js';
+import { Vitais } from './game/Vitals.js';
 
 /* ========================================================================== */
 /* Seed                                                                       */
@@ -196,6 +197,20 @@ const gameState = new GameState(engine, starSystem);
 const weather = new Weather(engine.scene, gameState);
 const sombras = new SombrasDoSol(engine.renderer, starSystem.sunLight);
 const ceuAmbiente = new CeuAmbiente(engine.renderer, engine.scene);
+
+// -----------------------------------------------------------------------------
+// VITAIS
+//
+// Duas instâncias, e não uma: o jogador e a nave são alvos separados, com
+// capacidades diferentes, e o dano num não pode escorrer para o outro. A nave
+// aguenta bem mais porque quem atira nela são canhões de outra nave, não uma
+// mordida — e porque perder a nave num planeta é bem pior que morrer a pé.
+//
+// Nada causa dano ainda; isto é a base que as armas, a fauna hostil e os drones
+// vão usar. Ver `src/game/Vitals.js`.
+// -----------------------------------------------------------------------------
+const vitaisJogador = new Vitais({ escudoMaximo: 100, vidaMaxima: 100 });
+const vitaisNave = new Vitais({ escudoMaximo: 260, vidaMaxima: 180 });
 const inventory = new Inventory();
 const discovery = new Discovery();
 const scanner = new Scanner(engine.scene);
@@ -1709,6 +1724,16 @@ engine.start((dt, elapsed) => {
   // 4. Ambiente (névoa, luz, exposição) em função da nova altitude ---------
   const landed = mode === 'FOOT' ? playerController.grounded : shipController.landed;
   gameState.update(activePlanet, _reference, landed);
+
+  // Os DOIS avançam todo quadro, inclusive o que não está em uso: o escudo da
+  // nave deixada no chão precisa se recuperar enquanto o piloto explora a pé,
+  // senão voltar para ela depois de um combate significaria decolar sem escudo
+  // nenhum, sem nada na tela explicando por quê.
+  if (started) {
+    vitaisJogador.atualizar(dt);
+    vitaisNave.atualizar(dt);
+  }
+
   if (started) checkPlanetDiscovery(activePlanet, gameState.altitude);
 
   // 5. Câmera --------------------------------------------------------------
@@ -1920,7 +1945,12 @@ engine.start((dt, elapsed) => {
     onFoot: mode === 'FOOT',
     throttle: shipController.braking ? 0 : shipController.throttle,
     jetpack: playerController.fuelRatio,
-    shield: 1,
+    // Os vitais mostrados são os de QUEM está levando o tiro agora: a pé é o
+    // traje, pilotando é o casco. Mostrar sempre os do jogador deixaria o
+    // combate de naves sem nenhuma leitura na tela.
+    shield: mode === 'FOOT' ? vitaisJogador.razaoEscudo : vitaisNave.razaoEscudo,
+    health: mode === 'FOOT' ? vitaisJogador.razaoVida : vitaisNave.razaoVida,
+    escudoRegenerando: mode === 'FOOT' ? vitaisJogador.regenerando : vitaisNave.regenerando,
     atmosphere: gameState.atmosphere,
     miningProgress: scanner.miningProgress,
     units: inventory.units,
@@ -1989,6 +2019,7 @@ window.__nms = {
   engine, starSystem, ship, shipController, playerController,
   gameState, inventory, discovery, scanner, seed: SEED, cloudQuality, audio,
   floatingOrigin, multiplayer, build, terraform, viewModel, galaxyMap, warp, weather,
+  vitaisJogador, vitaisNave, sombras, ceuAmbiente,
   saltarPara, alternarMapa,
   get ferramenta() { return ferramentaAtual(); },
   equipar,
