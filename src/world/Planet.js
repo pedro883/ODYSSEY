@@ -21,6 +21,7 @@ import { Clouds } from './Clouds.js';
 import { CampoDeEdicoes } from '../shared/edits.js';
 import { criarCampoDeDensidade } from '../shared/densidade.js';
 import { criarSonda } from '../shared/sonda.js';
+import { CascaProfunda } from './CascaProfunda.js';
 
 /**
  * Terreno volumétrico (`?volumetrico=1`). Mesmo interruptor do `ChunkManager`.
@@ -120,6 +121,11 @@ export class Planet {
     this.props = new PropScatter(this, this.terrainGroup);
     this.chunks.props = this.props;
 
+    // Faixas radiais abaixo do que a quadtree desenha. Só no modo volumétrico:
+    // no campo de altura não existe "abaixo da superfície" para desenhar.
+    this.cascaProfunda = VOLUMETRICO ? new CascaProfunda(this, this.terrainGroup) : null;
+    this.chunks.cascaProfunda = this.cascaProfunda;
+
     // A fauna carrega seus modelos de forma assíncrona; até lá ela fica
     // inerte, o que é aceitável porque só aparece perto do solo — e chegar lá
     // leva muito mais tempo do que carregar 3 arquivos de 140 KB.
@@ -198,6 +204,23 @@ export class Planet {
     this._passoRevalidacao();
     for (const root of this.roots) root.update(cameraLocal);
     this.chunks.update(cameraLocal);
+
+    // DEPOIS da quadtree: a casca profunda pendura suas faixas nas folhas dela,
+    // e rodar antes leria a subdivisão do quadro anterior.
+    if (this.cascaProfunda) {
+      // A elevação vem do amostrador DIRETO, e não de `sampleAt`.
+      //
+      // `sampleAt` devolve sempre o MESMO objeto `_sample`, e `_sample.direction`
+      // é reaproveitado como rascunho lá dentro. Passar por ele aqui — no meio
+      // do `update`, entre a quadtree e as nuvens — misturava dois usuários do
+      // mesmo rascunho e a profundidade saía absurda: medi -5325 onde o valor
+      // certo era +252. Duas linhas diretas não têm esse risco.
+      const dist = cameraLocal.length() || 1;
+      const elev = this.sampler.heightAt(
+        cameraLocal.x / dist, cameraLocal.y / dist, cameraLocal.z / dist
+      );
+      this.cascaProfunda.atualizar(cameraLocal, elev);
+    }
 
     // O centro vai para o shader TODO FRAME, não só na construção. Ele é uma
     // posição de MUNDO, e com origem flutuante o mundo se desloca por baixo do
@@ -511,6 +534,7 @@ export class Planet {
   dispose() {
     for (const root of this.roots) root.dispose();
     this.chunks.dispose();
+    this.cascaProfunda?.dispose();
     this.props.dispose();
     this.fauna.dispose();
     this.clouds.dispose();

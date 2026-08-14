@@ -288,6 +288,11 @@ export class ChunkManager {
   }
 
   _onChunkReady(payload) {
+    // As faixas profundas usam o MESMO pool e a mesma mensagem, mas não são nós
+    // da quadtree — elas têm ciclo de vida próprio (ver `CascaProfunda.js`).
+    // A faixa de ids delas é disjunta, então o desvio é uma consulta a um mapa.
+    if (this.cascaProfunda?.aceitar(payload, (p) => this._buildMesh(p))) return;
+
     // Nó colapsou enquanto o worker trabalhava: o resultado é lixo.
     if (this.cancelled.delete(payload.id)) return;
 

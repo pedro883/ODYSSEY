@@ -73,12 +73,21 @@ toda divergência é defeito do mesher, não mudança de conteúdo.
       As faixas fundas mostram o que estava invisível: a faixa 200..310 tem 2.599
       vértices de caverna que nunca eram desenhados.
 
-- [ ] **3b. Pedir as faixas fundas quando o jogador desce**
-      **Precisa de mais de uma malha por nó da quadtree**, e hoje `QuadTreeNode`
-      tem `this.mesh` singular e um `requestId` só. Toca `attachMesh`,
-      `releaseMesh`, `setVisible`, `dispose`, a chave do cache e a chave dos
-      props. É a mudança estrutural que o passo 3 sempre foi — o protocolo (3a)
-      era a parte segura.
+- [~] **3b. Faixas fundas — escrito, NÃO verificado numa descida real**
+      `CascaProfunda.js`. Evita a reescrita do `QuadTreeNode` com uma observação:
+      as faixas profundas só interessam ONDE O JOGADOR ESTÁ, então não precisam
+      de LOD, cache nem hierarquia — só de um punhado de blocos que nascem
+      quando ele desce e somem quando sobe. Isso cabe num mapa à parte, e o
+      recorte angular vem das folhas da quadtree (que já subdivide na direção da
+      câmera), o que evita inverter a projeção do cubo esferificado.
+
+      **Estado honesto:** a lógica funciona quando chamada diretamente — pedi e
+      despachei 4 blocos para a faixa correta. Mas NÃO consegui verificar numa
+      descida de verdade: o laço do jogo reposiciona a câmera a cada quadro e a
+      bancada não consegue segurar o observador dentro da caverna. Sem essa
+      verificação, considere o recurso não comprovado.
+
+      Não afeta quem joga sem `?volumetrico=1`.
 
 - [x] **4a. Sonda do campo (`sonda.js`)**
       `chaoAbaixo`, `tetoAcima`, `solidoEm` por marcha radial com bisseção.
