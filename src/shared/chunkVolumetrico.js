@@ -33,6 +33,14 @@
  */
 
 import { faceDirection } from './terrain.js';
+
+/**
+ * Passo radial GLOBAL, em unidades de mundo.
+ *
+ * Fixo de propósito: é o que faz dois chunks vizinhos amostrarem exatamente os
+ * mesmos raios e a costura entre eles fechar. Ver a nota longa em `rMin`.
+ */
+const PASSO_RADIAL = 4.75;
 import { malharCampo } from './marchingCubes.js';
 
 /**
@@ -62,10 +70,11 @@ export function malharChunkVolumetrico({
   profundidadeAte = 90,
 }) {
   const na = resAngular;
-  const nr = resRadial;
+  // `resRadial` vira apenas uma dica: o número real de camadas sai do relevo
+  // local dividido pelo passo GLOBAL (ver a nota adiante).
+  let nr = resRadial;
   // Uma camada extra de cada lado, para o gradiente das normais na borda.
   const ladoA = na + 3;
-  const ladoR = nr + 3;
   const passoAng = size / na;
 
   // -------------------------------------------------------------------------
@@ -112,9 +121,39 @@ export function malharChunkVolumetrico({
   // é o comportamento de sempre. Faixas mais fundas usam o mesmo referencial e
   // se encaixam sem sobreposição.
   // -------------------------------------------------------------------------
-  const rMax = hMax - profundidadeDe;
-  const rMin = hMin - profundidadeAte;
-  const passoRad = (rMax - rMin) / nr;
+  // -------------------------------------------------------------------------
+  // A RETÍCULA RADIAL É GLOBAL, E ISSO FECHA A COSTURA.
+  //
+  // A primeira versão derivava o passo da faixa DESTE chunk:
+  // `(rMax - rMin) / nr`. Cada chunk tem o próprio relevo, logo o próprio rMin
+  // e o próprio passo — e dois vizinhos amostravam raios diferentes. Medido
+  // entre dois chunks lado a lado:
+  //
+  //   A: 4299,26  4303,91  4308,55  ...  (passo 4,649)
+  //   B: 4299,92  4304,70  4309,48  ...  (passo 4,777)
+  //
+  // Como os vértices saem de interpolação ENTRE amostras, retículas diferentes
+  // produzem vértices em raios diferentes no plano de contato: a costura não
+  // fecha, e sobra uma fenda por onde se vê o vazio. Nenhum vértice de borda
+  // coincidia com o do vizinho.
+  //
+  // Com o passo fixo e o início ancorado num múltiplo dele, dois chunks
+  // quaisquer amostram exatamente os mesmos raios. O número de camadas passa a
+  // variar com o relevo local, que é o preço — e é barato.
+  // -------------------------------------------------------------------------
+  const rMinBruto = hMin - profundidadeAte;
+  const rMinAlinhado = Math.floor(rMinBruto / PASSO_RADIAL) * PASSO_RADIAL;
+  const camadas = Math.max(
+    4,
+    Math.ceil((hMax - profundidadeDe - rMinAlinhado) / PASSO_RADIAL)
+  );
+  const rMin = rMinAlinhado;
+  const passoRad = PASSO_RADIAL;
+  const rMax = rMin + camadas * passoRad;
+
+  // A partir daqui o número de camadas é o calculado, não o pedido.
+  nr = camadas;
+  const ladoRFinal = nr + 3;
 
   /** Posição de mundo de um nó `(a, b, r)` da grade. */
   const posicaoDe = (a, b, r, saida) => {
@@ -135,11 +174,11 @@ export function malharChunkVolumetrico({
   // A parte cara — a altura da superfície — vem da tabela. O que sobra por
   // amostra é uma subtração e, abaixo da superfície, o termo de cavernas.
   // -------------------------------------------------------------------------
-  const total = ladoA * ladoA * ladoR;
+  const total = ladoA * ladoA * ladoRFinal;
   const grade = new Float32Array(total);
   const p = [0, 0, 0];
 
-  for (let r = 0; r < ladoR; r++) {
+  for (let r = 0; r < ladoRFinal; r++) {
     const raio = rMin + (r - 1) * passoRad;
     for (let b = 0; b < ladoA; b++) {
       for (let a = 0; a < ladoA; a++) {
@@ -167,7 +206,7 @@ export function malharChunkVolumetrico({
   // Preenche com "ar" (positivo) para que as células fora da região real nunca
   // gerem superfície: densidade positiva em todos os cantos é o caso 0.
   campoRemapeado.fill(1e6);
-  for (let r = 0; r < ladoR; r++) {
+  for (let r = 0; r < ladoRFinal; r++) {
     for (let b = 0; b < ladoA; b++) {
       for (let a = 0; a < ladoA; a++) {
         campoRemapeado[(r * lado + b) * lado + a] = grade[(r * ladoA + b) * ladoA + a];

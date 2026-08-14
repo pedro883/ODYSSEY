@@ -149,9 +149,26 @@ toda divergência é defeito do mesher, não mudança de conteúdo.
 - **Sem captura visual limpa de uma boca.** A verificação é numérica. As
   tentativas de fotografar puseram a câmera dentro da geometria.
 
-- [ ] **5. Costuras entre níveis de LOD**
-      Hoje resolvidas por saia. Em volume, exige algo como transvoxel, ou
-      aceitar rachaduras nas transições.
+- [x] **5a. Costura entre chunks do MESMO nível**
+      A causa não era o LOD: cada chunk derivava a retícula radial do PRÓPRIO
+      relevo, então dois vizinhos amostravam raios diferentes —
+
+        A: 4299,26  4303,91  4308,55 ...  (passo 4,649)
+        B: 4299,92  4304,70  4309,48 ...  (passo 4,777)
+
+      e os vértices interpolados no plano de contato caíam em raios diferentes.
+      Medido: ZERO vértices de borda coincidiam, e o vizinho mais próximo estava
+      a 1,8 unidade.
+
+      Com a retícula radial ancorada numa grade GLOBAL (passo fixo, início num
+      múltiplo dele), os dois passaram a partir do mesmo rMin e 28 vértices de
+      borda têm par EXATO. O número de camadas passa a variar com o relevo
+      local, que é o preço, e é barato.
+
+- [ ] **5b. Costura entre níveis DIFERENTES de LOD**
+      Continua aberta. O chunk fino tem o dobro de amostras angulares na borda,
+      então sobram vértices em T sem correspondente do lado grosso. Exige
+      transvoxel, ou saia, ou forçar níveis iguais na vizinhança.
 
 - [ ] **6. Bioma, cor, props e oceano**
       Todos derivam de `heightAt`. Precisam de critério novo: a cor passa a
