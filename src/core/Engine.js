@@ -122,10 +122,12 @@ export class Engine {
     // efeito está ajudando ou só embaçando.
     // -----------------------------------------------------------------------
     const semPost = new URLSearchParams(location.search).get('post') === 'off';
-    this.postEnabled = this.aerialEnabled && !semPost;
-    if (this.postEnabled) {
+    // Os recursos são criados sempre que há pipeline linear, mesmo com o efeito
+    // desligado: o menu de opções liga e desliga isto em tempo de execução, e
+    // alocar um render target no meio do jogo é um engasgo visível. Um alvo
+    // ocioso custa memória, não tempo de quadro.
+    if (this.aerialEnabled) {
       this.post = new PostProcess();
-      this.aerial.uniforms.uSaidaLinear.value = 1;
 
       // Segundo alvo: a saída da perspectiva aérea, ainda linear. Não dá para
       // escrever no mesmo alvo que se está lendo.
@@ -135,6 +137,13 @@ export class Engine {
         stencilBuffer: false,
       });
     }
+    this.definirPos(this.aerialEnabled && !semPost);
+
+    // Definidos ANTES do primeiro `resize`, que já os lê. Os valores reais vêm
+    // das preferências logo em seguida (`main.js`); estes são só o que vale
+    // durante a construção.
+    this.escalaResolucao = 1;
+    this.tetoPixelRatio = 2;
 
     this._onResize = () => this.resize();
     window.addEventListener('resize', this._onResize);
@@ -148,11 +157,73 @@ export class Engine {
     return this.renderer.capabilities.isWebGL2;
   }
 
+  /**
+   * Liga ou desliga o pós-processamento em tempo de execução.
+   *
+   * O `uSaidaLinear` do passe atmosférico acompanha: com o pós ligado ele
+   * entrega radiância linear para o bloom trabalhar e o tone mapping acontece
+   * no fim; desligado, ele próprio fecha a conta. Esquecer de mudar os dois
+   * juntos produz uma tela lavada (linear mostrada como se fosse sRGB) ou
+   * duplamente comprimida.
+   */
+  definirPos(ligado) {
+    const novo = !!ligado && !!this.post;
+    this.postEnabled = novo;
+    this.aerial.uniforms.uSaidaLinear.value = novo ? 1 : 0;
+  }
+
+  /**
+   * Fração da resolução nativa em que a CENA é desenhada.
+   *
+   * =======================================================================
+   * A ALAVANCA MAIS FORTE DO JOGO, E POR QUÊ
+   * =======================================================================
+   * Medido na superfície a 1280×720: o quadro custava 5,73 ms de GPU e caía
+   * para 0,65 ms escondendo só as nuvens. Quase tudo que é caro aqui — ray
+   * marching das nuvens, casca de atmosfera, perspectiva aérea, bloom — é custo
+   * de FRAGMENTO, isto é, proporcional ao número de pixels desenhados.
+   *
+   * Reduzir a escala para 0,7 desenha metade dos pixels e portanto corta pela
+   * metade o custo de TODOS esses passes de uma vez. Nenhuma outra opção ataca
+   * o problema inteiro; as demais atacam uma peça dele.
+   *
+   * O que se perde é nitidez de borda, e menos do que parece: o resultado é
+   * ampliado com filtragem linear, e a cena é feita de gradientes suaves (céu,
+   * névoa, terreno) que ampliam bem. Texto e interface NÃO passam por aqui —
+   * são DOM, desenhados sempre na resolução nativa —, que é o que torna a troca
+   * aceitável.
+   *
+   * @param {number} escala 0,2 a 1
+   */
+  definirEscalaResolucao(escala) {
+    const nova = Math.max(0.2, Math.min(1, escala || 1));
+    if (nova === this.escalaResolucao) return;
+    this.escalaResolucao = nova;
+    this.resize();
+  }
+
+  /**
+   * Teto de pixels por unidade de CSS.
+   *
+   * Separado da escala porque são coisas diferentes: este limita o quanto a
+   * TELA do usuário multiplica o trabalho (num portátil HiDPI, 2 quadruplica os
+   * fragmentos antes de qualquer outra conta), enquanto a escala é uma decisão
+   * de qualidade tomada por cima disso.
+   */
+  definirTetoPixelRatio(teto) {
+    const novo = Math.max(0.5, Math.min(3, teto || 1));
+    if (novo === this.tetoPixelRatio) return;
+    this.tetoPixelRatio = novo;
+    this.resize();
+  }
+
   resize() {
     const width = window.innerWidth;
     const height = window.innerHeight;
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.tetoPixelRatio ?? 2));
     this.renderer.setSize(width, height);
 
     // O alvo vive em PIXELS DE DISPOSITIVO, não em pixels de CSS: ele
@@ -160,8 +231,11 @@ export class Engine {
     // janela numa tela 2x renderizaria a cena em metade da resolução.
     if (this.renderTarget) {
       const ratio = this.renderer.getPixelRatio();
-      const l = Math.round(width * ratio);
-      const a = Math.round(height * ratio);
+      const escala = this.escalaResolucao ?? 1;
+      // Mínimo de 2 px: um alvo de dimensão zero (janela minimizada) invalida o
+      // framebuffer e o WebGL passa a reclamar a cada quadro.
+      const l = Math.max(2, Math.round(width * ratio * escala));
+      const a = Math.max(2, Math.round(height * ratio * escala));
       this.renderTarget.setSize(l, a);
       this.alvoComposto?.setSize(l, a);
       this.post?.redimensionar(l, a);

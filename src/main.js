@@ -50,6 +50,8 @@ import { Projeteis } from './game/Weapons.js';
 import { Blaster } from './game/Blaster.js';
 import { EDICAO } from './shared/edits.js';
 import { Sentinelas } from './game/Sentinelas.js';
+import { Qualidade } from './game/Qualidade.js';
+import { MenuPausa } from './ui/MenuPausa.js';
 
 /* ========================================================================== */
 /* Seed                                                                       */
@@ -200,6 +202,99 @@ const warpLines = new WarpLines(engine.scene);
 const gameState = new GameState(engine, starSystem);
 const weather = new Weather(engine.scene, gameState);
 const sombras = new SombrasDoSol(engine.renderer, starSystem.sunLight);
+
+/* ========================================================================== */
+/* Qualidade gráfica                                                          */
+/* ========================================================================== */
+
+const qualidade = new Qualidade();
+
+/**
+ * Aplica as preferências a quem as consome.
+ *
+ * Um ponto só, chamado no boot e a cada mudança no menu. A alternativa — cada
+ * subsistema lendo as preferências por conta própria — espalharia a ordem de
+ * aplicação por seis arquivos, e a ordem importa: o detalhe de superfície é
+ * escrito em uniformes que só existem depois de o material compilar.
+ */
+function aplicarQualidade() {
+  engine.definirTetoPixelRatio(qualidade.tetoPixelRatio);
+  engine.definirEscalaResolucao(qualidade.escalaResolucao);
+  engine.definirPos(qualidade.pos);
+  sombras.definir(qualidade.sombras);
+  cloudQuality.aplicar(qualidade.nuvens, qualidade.nuvensAuto);
+
+  // O detalhe procedural do terreno é caro em fragmento (três oitavas de ruído
+  // mais o gradiente para a normal) e é a primeira coisa que se pode perder sem
+  // que a silhueta do mundo mude. Zerar as forças é mais barato que recompilar
+  // um shader sem o bloco.
+  for (const planeta of starSystem.planets) {
+    const dados = planeta.chunks.material.userData;
+    const u = dados.detalhe;
+    const p = dados.detalhePadrao;
+    if (!u || !p) continue;
+
+    // O grão fino e o relevo são o que custa: alta frequência, avaliada por
+    // fragmento, mais três amostras extras para o gradiente da normal. As
+    // escalas macro e meso ficam mesmo no modo econômico — elas custam duas
+    // avaliações de ruído e são o que impede o terreno de virar chapa lisa.
+    const ligado = qualidade.detalheTerreno;
+    u.uForcaGrao.value = ligado ? p.grao : 0;
+    u.uForcaRelevo.value = ligado ? p.relevo : 0;
+  }
+}
+
+qualidade.aoMudar(aplicarQualidade);
+aplicarQualidade();
+
+/**
+ * Custo de GPU por quadro, em milissegundos.
+ *
+ * Usa `EXT_disjoint_timer_query_webgl2`, que é a única forma de medir o que a
+ * GPU realmente gastou: o relógio da CPU só mede quanto tempo levou para
+ * ENFILEIRAR os comandos, e num pipeline como este ele devolve valores dez
+ * vezes menores que a verdade. Devolve `null` onde a extensão não existe (é
+ * opcional, e alguns navegadores a escondem por impressão digital).
+ */
+async function medirGpu(repeticoes = 24) {
+  const gl = engine.renderer.getContext();
+  const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+  if (!ext) return null;
+
+  for (let i = 0; i < 4; i++) engine.render(); // aquece: shader e cache
+  const consulta = gl.createQuery();
+  gl.beginQuery(ext.TIME_ELAPSED_EXT, consulta);
+  for (let i = 0; i < repeticoes; i++) engine.render();
+  gl.endQuery(ext.TIME_ELAPSED_EXT);
+
+  // Prazo por RELÓGIO, não por número de tentativas: numa aba em segundo plano
+  // o navegador estrangula `setTimeout` para um disparo por segundo, e um laço
+  // de 120 tentativas passaria dois minutos preso mostrando "medindo…". Dois
+  // segundos de parede é mais que suficiente — a consulta normalmente fica
+  // pronta no quadro seguinte.
+  const prazo = performance.now() + 2000;
+  while (performance.now() < prazo) {
+    await new Promise((r) => setTimeout(r, 16));
+    // `GPU_DISJOINT` significa que o driver preemptou a fila no meio da medida;
+    // o resultado existe mas não vale nada.
+    if (gl.getParameter(ext.GPU_DISJOINT_EXT)) break;
+    if (gl.getQueryParameter(consulta, gl.QUERY_RESULT_AVAILABLE)) {
+      const ns = gl.getQueryParameter(consulta, gl.QUERY_RESULT);
+      gl.deleteQuery(consulta);
+      return ns / 1e6 / repeticoes;
+    }
+  }
+  gl.deleteQuery(consulta);
+  return null;
+}
+
+const menuPausa = new MenuPausa(qualidade, {
+  niveisDeNuvem: cloudQuality.niveis,
+  medir: () => medirGpu(),
+  aoFechar: () => {
+    requestPointerLock();
+  },
+});
 const ceuAmbiente = new CeuAmbiente(engine.renderer, engine.scene);
 
 // -----------------------------------------------------------------------------
@@ -727,6 +822,11 @@ async function iniciar() {
   multiplayer?.identificar(nome);
 
   started = true;
+  // Reaplica agora que o mundo desenhou pelo menos uma vez: os uniformes de
+  // detalhe do terreno só existem depois de `onBeforeCompile` rodar, e no boot
+  // ainda não existiam. Sem isto, quem escolheu o perfil de desempenho voltaria
+  // ao jogo com o detalhe caro ligado.
+  aplicarQualidade();
   // Já restauramos a posição salva; deixar o cenário de URL rodar depois a
   // sobrescreveria alguns frames adiante, e o jogador veria um salto.
   if (voltouAoPonto) spawnApplied = true;
@@ -755,15 +855,52 @@ viewModel.redimensionar(window.innerWidth / window.innerHeight);
 galaxyMap.redimensionar(window.innerWidth / window.innerHeight);
 
 canvas.addEventListener('click', () => {
-  if (started && !painelAberto) requestPointerLock();
+  requestPointerLock();
   // Voltar de outra aba deixa o contexto suspenso; retomar é idempotente.
   audio.start();
 });
 
+/**
+ * O cursor precisa estar VISÍVEL e livre agora?
+ *
+ * ===========================================================================
+ * FONTE ÚNICA DE VERDADE, DEPOIS DE UM BUG QUE APARECEU DUAS VEZES
+ * ===========================================================================
+ * Antes, cada modo cuidava do ponteiro por conta própria — o mapa chamava
+ * `exitPointerLock` ao abrir, o painel também, o menu de pausa idem. E o
+ * ouvinte de clique do canvas, que não sabia de nenhum deles, RETRAVAVA o
+ * ponteiro no clique seguinte.
+ *
+ * O efeito era o relatado: abrir o menu de pausa, clicar em qualquer coisa e o
+ * cursor sumir, deixando o menu impossível de usar. No mapa galáctico era pior,
+ * porque lá o alvo do clique é o próprio canvas — selecionar uma estrela
+ * travava o ponteiro e o mapa deixava de responder ao mouse.
+ *
+ * A correção não é acrescentar mais uma chamada de `exitPointerLock`: é ter UM
+ * lugar que responde "o cursor está livre?", e fazer com que tanto o pedido de
+ * travamento quanto os manipuladores de botão o consultem. Qualquer modo novo
+ * que precise do cursor entra nesta lista e funciona de imediato.
+ */
+function cursorLivre() {
+  return !started || menuPausa.aberto || galaxyMap.aberto || painelAberto || !!hud.chat?.aberto;
+}
+
 function requestPointerLock() {
+  if (cursorLivre()) return;
   // Pode rejeitar por motivos fora do nosso controle (documento aninhado,
   // política do navegador). O jogo continua jogável no teclado.
   canvas.requestPointerLock?.()?.catch?.(() => {});
+}
+
+/**
+ * Solta o ponteiro e garante que ele não volte no próximo clique.
+ *
+ * Chamado por quem abre um modo de cursor livre. O `exitPointerLock` sozinho
+ * não basta — é `cursorLivre()` que impede o retravamento —, mas sem ele o
+ * cursor só reapareceria no próximo movimento do mouse.
+ */
+function soltarPonteiro() {
+  document.exitPointerLock?.();
 }
 
 /* ========================================================================== */
@@ -817,6 +954,7 @@ function applySpawnScenario() {
   multiplayer?.identificar(pilotInput.value.trim() || 'Piloto');
 
   started = true;
+  aplicarQualidade(); // ver a nota no outro ponto de início
   overlay.classList.add('fade-out');
   hud.show();
 }
@@ -931,6 +1069,23 @@ window.addEventListener('keydown', (event) => {
   // `N` de navegação, e não `M`: `M` já é o mudo, e duas ações na mesma tecla é
   // exatamente o que este arquivo passou a não fazer.
   // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // ESCAPE ABRE A PAUSA, e vem antes de tudo.
+  //
+  // Precisa ser a PRIMEIRA coisa testada porque é a tecla de saída universal: se
+  // qualquer bloco acima puder consumi-la, existe um estado em que o jogador
+  // aperta Escape e nada acontece — e é justamente no estado travado que ele
+  // mais precisa dela. Os modos que dão outro sentido ao Escape (mapa, chat,
+  // painel) tratam disso fechando a si mesmos primeiro.
+  // -------------------------------------------------------------------------
+  if (event.code === 'Escape') {
+    if (hud.chat?.aberto) return; // o próprio campo já limpa e fecha
+    if (galaxyMap.aberto) { fecharMapa(); return; }
+    if (painelAberto) { alternarPainel(false); return; }
+    menuPausa.alternar();
+    return;
+  }
+
   if (event.code === 'KeyN') {
     alternarMapa();
     return;
@@ -1088,7 +1243,9 @@ canvas.addEventListener('mousedown', (event) => {
     return;
   }
 
-  if (!started || mode !== 'FOOT' || painelAberto) return;
+  // `cursorLivre()` cobre pausa, painel, chat e "ainda não começou" de uma vez.
+  // Sem isto, clicar no fundo escurecido do menu de pausa disparava o blaster.
+  if (cursorLivre() || mode !== 'FOOT') return;
 
   if (event.button === 0) botao.esquerdo = true;
   if (event.button === 2) botao.direito = true;
@@ -1231,7 +1388,7 @@ function alternarMapa() {
   // também a entrada só atrasaria a primeira leitura da tela.
   galaxyMap.assentar();
   hud.mostrarMapa(true);
-  document.exitPointerLock?.();
+  soltarPonteiro();
 
   // ---------------------------------------------------------------------
   // O MUNDO PARA ENQUANTO O MAPA ESTÁ ABERTO.
@@ -1258,7 +1415,7 @@ function fecharMapa() {
   galaxyMap.eixos.frente = galaxyMap.eixos.lado = galaxyMap.eixos.cima = 0;
   hud.mostrarMapa(false);
   audio.ui(false);
-  if (started && !painelAberto) requestPointerLock();
+  requestPointerLock();
 }
 
 /* ========================================================================== */
@@ -1466,7 +1623,7 @@ function alternarPainel(aberto) {
   if (painelAberto) {
     // Solta o cursor: o painel é clicável, e com o ponteiro travado no canvas
     // não haveria como escolher uma peça.
-    document.exitPointerLock?.();
+    soltarPonteiro();
   } else if (started) {
     requestPointerLock();
   }
@@ -1871,6 +2028,16 @@ let biomeTimer = 0;
 const BIOME_INTERVAL = 0.25;
 
 engine.start((dt, elapsed) => {
+  // 0.0 Pausa: nada avança, mas o quadro continua sendo desenhado -----------
+  //
+  // Desenhar é justamente o ponto: o menu tem opções gráficas, e o jogador
+  // precisa VER o efeito de cada uma sobre a cena real atrás do vidro fosco.
+  // Um menu sobre tela preta obrigaria a fechar, olhar, reabrir e adivinhar.
+  //
+  // O `return` cobre física, LOD, fauna, sentinelas e rede — que é o que
+  // "pausado" tem de significar.
+  if (menuPausa.aberto) return;
+
   // 0. Mapa galáctico: o mundo fica congelado ------------------------------
   //
   // O mapa não é uma sobreposição, é um MODO. A cena do mundo nem chega a ser
@@ -2232,7 +2399,7 @@ window.__nms = {
   gameState, inventory, discovery, scanner, seed: SEED, cloudQuality, audio,
   floatingOrigin, multiplayer, build, terraform, viewModel, galaxyMap, warp, weather,
   vitaisJogador, vitaisNave, sombras, ceuAmbiente, projeteis, blaster, jogadorComoDono, hud,
-  sentinelas, alvoJogador, montarAlvos,
+  sentinelas, alvoJogador, montarAlvos, qualidade, menuPausa, medirGpu, aplicarQualidade,
   saltarPara, alternarMapa,
   get ferramenta() { return ferramentaAtual(); },
   equipar,

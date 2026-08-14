@@ -171,6 +171,48 @@
       <!-- Clarão vermelho ao levar dano. Fora dos painéis e sem captura de
            clique: cobre a tela inteira e não pode interceptar o mouse. -->
       <div id="hud-dano"></div>
+      <!-- Menu de pausa. Fora dos painéis do HUD porque cobre a tela inteira e
+           precisa receber clique (os painéis são `pointer-events: none`). -->
+      <div id="pausa" class="hidden">
+        <div class="pausa-caixa">
+          <header>PAUSADO</header>
+
+          <section class="pausa-secao">
+            <h3>GRÁFICOS</h3>
+            <div class="opcao">
+              <label>PREDEFINIÇÃO</label>
+              <div class="botoes" id="op-predef"></div>
+            </div>
+            <div class="opcao">
+              <label>ESCALA DE RESOLUÇÃO <b id="op-escala-valor">—</b></label>
+              <input type="range" id="op-escala" min="40" max="100" step="5" />
+            </div>
+            <div class="opcao">
+              <label>LIMITE DE PIXELS <b id="op-ratio-valor">—</b></label>
+              <input type="range" id="op-ratio" min="10" max="20" step="5" />
+            </div>
+            <div class="opcao">
+              <label>NUVENS</label>
+              <div class="botoes" id="op-nuvens"></div>
+            </div>
+            <div class="opcao alternar">
+              <label for="op-sombras">SOMBRAS</label>
+              <input type="checkbox" id="op-sombras" />
+            </div>
+            <div class="opcao alternar">
+              <label for="op-pos">PÓS-PROCESSAMENTO</label>
+              <input type="checkbox" id="op-pos" />
+            </div>
+            <div class="opcao alternar">
+              <label for="op-detalhe">DETALHE DO TERRENO</label>
+              <input type="checkbox" id="op-detalhe" />
+            </div>
+          </section>
+
+          <p class="pausa-dica" id="pausa-medida">—</p>
+          <button id="pausa-voltar">VOLTAR AO JOGO</button>
+        </div>
+      </div>
       <!-- Nível de alerta das sentinelas. Vazio e oculto em nível zero: um
            medidor sempre presente ensinaria o jogador a ignorá-lo. -->
       <div id="hud-alerta" class="off"><span class="estrelas"></span><b>PROCURADO</b></div>

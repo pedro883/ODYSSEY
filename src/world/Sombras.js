@@ -82,6 +82,37 @@ export class SombrasDoSol {
   }
 
   /**
+   * Liga ou desliga em tempo de execução (menu de opções).
+   *
+   * `autoUpdate` acompanha `enabled` porque desligar só o `castShadow` da luz
+   * deixaria o mapa de sombra congelado em memória e ainda amostrado pelos
+   * shaders — que continuariam compilados com `USE_SHADOWMAP` e pagando a
+   * amostragem por fragmento sem sombra nenhuma na tela.
+   */
+  definir(ligado) {
+    if (this.ligado === !!ligado) return;
+    this.ligado = !!ligado;
+
+    this.renderer.shadowMap.enabled = this.ligado;
+    this.renderer.shadowMap.autoUpdate = this.ligado;
+    if (this.sol) this.sol.castShadow = this.ligado;
+    if (this.ligado) this.adotar(this.sol);
+
+    // Os materiais JÁ COMPILADOS carregam `USE_SHADOWMAP` nas suas opções e não
+    // reagem sozinhos à troca: sem invalidá-los, desligar as sombras não
+    // devolve o desempenho (os shaders continuam amostrando o mapa) e ligá-las
+    // não mostra sombra nenhuma. A cena é alcançada pelo pai da própria luz,
+    // que é onde ela foi anexada.
+    const cena = this.sol?.parent;
+    cena?.traverse((o) => {
+      if (o.material) {
+        const lista = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of lista) m.needsUpdate = true;
+      }
+    });
+  }
+
+  /**
    * Configura a luz de um sistema estelar.
    *
    * Existe separado do construtor porque o salto reconstrói o `StarSystem`

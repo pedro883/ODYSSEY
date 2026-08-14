@@ -1512,6 +1512,83 @@ Os uniformes ficam expostos em `material.userData.detalhe` para calibração ao
 vivo — sem isso, ajustar qualquer número exige recarregar e esperar o mundo
 inteiro reaparecer, que é calibrar no escuro.
 
+### 3.16.5 Desempenho: onde o tempo estava indo
+
+Relato: **10 fps em máquinas fracas, no planeta**. Medindo com
+`EXT_disjoint_timer_query_webgl2` (o relógio da CPU não serve — ele mede quanto
+tempo levou para *enfileirar* os comandos, não o que a GPU gastou):
+
+| cena | GPU por quadro, 1280×720 |
+|---|---|
+| tudo ligado | **5,73 ms** |
+| escondendo só as cascas de nuvem | **0,65 ms** |
+
+As nuvens eram **quase 90% do custo**, e havia **cinco cascas** desenhadas ao
+mesmo tempo — uma por corpo do sistema, incluindo mundos a oitenta mil unidades,
+cujas nuvens juntas custavam mais que as do planeta onde o jogador estava
+pousado.
+
+Isso explica o sintoma ser pior *no planeta*: ray marching é custo de fragmento
+puro, escala com a área de tela coberta, e ao nível do solo a casca cobre o céu
+inteiro — o pior caso possível para uma GPU integrada.
+
+O que mudou:
+
+- **Corte de nuvens por distância de 12× para 4,5×** a casca externa. A perda é
+  desprezível (a essa distância a nuvem já está no fim do desvanecimento), e
+  elimina de uma vez as cascas dos corpos que não são o ativo.
+- **Escala de resolução** (`Engine.definirEscalaResolucao`). Como quase todo o
+  custo é de fragmento, desenhar a cena a 85% da largura e altura corta ~28% do
+  trabalho de **todos** os passes de uma vez. É a única alavanca que ataca o
+  problema inteiro em vez de uma peça dele. A interface não passa por ela — é
+  DOM, sempre na resolução nativa —, que é o que torna a troca aceitável.
+- **Teto de `devicePixelRatio` de 2 para 1,5** por padrão. Num portátil HiDPI
+  fraco, 2 quadruplica os fragmentos antes de qualquer outra conta.
+- **Padrão passou de "tudo no máximo" para "equilibrado".** O controlador
+  automático das nuvens só descia *depois* de medir quadros ruins — ou seja,
+  todo jogador de máquina fraca via o jogo engasgar antes de melhorar. Começar
+  no meio inverte isso.
+
+Medido na mesma cena congelada: **Desempenho 0,29 ms** contra **Alto 2,50 ms**.
+
+### 3.16.6 Menu de pausa e opções gráficas
+
+`Esc` abre. O mundo congela (física, LOD, fauna, sentinelas, rede) mas **continua
+sendo desenhado**, atrás de um vidro fosco: o menu tem opções gráficas, e o
+jogador precisa ver o efeito de cada uma sobre a cena real. Um menu sobre tela
+preta obrigaria a fechar, olhar, reabrir e adivinhar.
+
+Pela mesma razão, o menu mostra o **custo de GPU medido em milissegundos** e o
+remede a cada mudança. Sem isso, opção gráfica é adivinhação: mexe-se num
+controle sem ter como saber se ajudou.
+
+Três predefinições (Desempenho / Equilibrado / Alto) mais controles individuais
+de escala de resolução, teto de pixels, nuvens, sombras, pós-processamento e
+detalhe do terreno. Mexer num controle individual muda a predefinição para
+*personalizado* — dizer "Alto" com sombras desligadas seria mentira. Tudo é
+gravado em `localStorage`, e os parâmetros de URL continuam vencendo o que está
+gravado, porque existem justamente para reproduzir um caso sem mexer nas
+preferências de quem relatou.
+
+### 3.16.7 Quem manda no cursor
+
+O ponteiro era travado no canvas por um ouvinte de clique que não sabia de mais
+nada. Cada modo que precisava do cursor chamava `exitPointerLock` por conta
+própria — e o clique seguinte **retravava**.
+
+O sintoma apareceu duas vezes: no menu de pausa, clicar em qualquer coisa fazia
+o cursor sumir e o menu virava inútil; no mapa galáctico era pior, porque lá o
+alvo do clique é o próprio canvas, então selecionar uma estrela travava o
+ponteiro e o mapa parava de responder ao mouse.
+
+A correção não foi acrescentar mais uma chamada de `exitPointerLock`, e sim ter
+**um** lugar que responde "o cursor está livre?" — `cursorLivre()`, verdadeiro
+com menu, mapa, painel ou chat abertos, ou antes de o jogo começar. Tanto o
+pedido de travamento quanto os manipuladores de botão o consultam, o que também
+consertou de graça o blaster disparando ao clicar no fundo escurecido do menu.
+Qualquer modo novo que precise do cursor entra nessa lista e funciona de
+imediato.
+
 ### 3.17.1 Ver o que o jogo está desenhando
 
 Um endpoint `/__captura` no `vite.config.js` (só em `serve`) recebe um quadro do

@@ -107,6 +107,17 @@ export function aplicarDetalheDeSuperficie(material, cfg) {
     // que na prática significa calibrar no escuro.
     material.userData.detalhe = shader.uniforms;
 
+    // Cópia dos valores de projeto, para quem os desliga saber ao que voltar.
+    // Guardada AQUI e não em quem desliga: ler o valor corrente para "lembrar"
+    // dele grava zero se o desligamento acontecer duas vezes seguidas, e o
+    // detalhe nunca mais volta.
+    material.userData.detalhePadrao = {
+      grao: shader.uniforms.uForcaGrao.value,
+      relevo: shader.uniforms.uForcaRelevo.value,
+      macro: shader.uniforms.uForcaMacro.value,
+      meso: shader.uniforms.uForcaMeso.value,
+    };
+
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
