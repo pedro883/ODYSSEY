@@ -8,6 +8,7 @@
   --accent-dim: #1c6d7d;
   --warn: #ffb44d;
   --shield: #6cf0a8;
+  --dano: #ff6a5e;
   --jet: #a98bff;
   --gold: #ffd77a;
   --bg-panel: rgba(4, 12, 20, 0.55);
@@ -146,6 +147,190 @@ body {
 
 .fill--throttle { background: linear-gradient(90deg, var(--accent-dim), var(--accent)); }
 .fill--shield   { background: linear-gradient(90deg, #227a52, var(--shield)); }
+.fill--health   { background: linear-gradient(90deg, #7a2222, var(--dano)); }
+
+/* ------------------------------ Menu de pausa ----------------------------- */
+
+#pausa {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* O jogo continua visível atrás, só escurecido e borrado: some a informação
+     de onde o jogador estava, e voltar deixa de ser desorientador. */
+  background: rgba(2, 8, 14, 0.72);
+  backdrop-filter: blur(6px);
+  /* Explícito, mesmo sendo o padrão: este elemento já nasceu uma vez dentro do
+     #hud (que é `pointer-events: none`) e herdou a inércia. Declarar aqui faz
+     com que colocá-lo no lugar errado deixe de ser silencioso. */
+  pointer-events: auto;
+}
+
+#pausa.hidden { display: none; }
+
+.pausa-caixa {
+  width: min(520px, 92vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: 20px 24px 22px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(4, 12, 20, 0.94);
+  color: var(--text);
+}
+
+.pausa-caixa > header {
+  font-size: 15px;
+  letter-spacing: 0.3em;
+  color: var(--accent);
+  margin-bottom: 16px;
+}
+
+.pausa-secao h3 {
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  color: var(--accent-dim);
+  margin: 0 0 10px;
+  font-weight: 400;
+}
+
+.opcao { margin-bottom: 14px; }
+
+.opcao > label {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  margin-bottom: 6px;
+  opacity: 0.85;
+}
+
+.opcao > label b { color: var(--accent); float: right; }
+
+.opcao.alternar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.opcao.alternar > label { margin: 0; }
+
+.opcao input[type='range'] { width: 100%; accent-color: var(--accent); }
+.opcao input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px; }
+
+.botoes { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.botoes button {
+  flex: 1 1 auto;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--text);
+  background: rgba(88, 232, 255, 0.06);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.botoes button:hover { background: rgba(88, 232, 255, 0.16); }
+
+.botoes button.sel {
+  background: rgba(88, 232, 255, 0.22);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.pausa-dica {
+  margin: 14px 0 16px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  opacity: 0.6;
+  min-height: 13px;
+}
+
+#pausa-voltar {
+  width: 100%;
+  padding: 10px;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  color: #04121c;
+  background: var(--accent);
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+/* --------------------------- Alerta de sentinela -------------------------- */
+
+#hud-alerta {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border: 1px solid rgba(255, 106, 94, 0.5);
+  border-radius: 3px;
+  background: rgba(30, 4, 4, 0.55);
+  color: var(--dano);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  pointer-events: none;
+  z-index: 39;
+}
+
+#hud-alerta.off { display: none; }
+
+#hud-alerta .estrelas { letter-spacing: 0.1em; font-size: 13px; }
+
+/* Pisca só a partir do nível 3: até lá o alerta informa, dali em diante ele
+   apressa. Piscar desde o primeiro nível gastaria o recurso cedo demais. */
+#hud-alerta.grave { animation: pulso-alerta 1s ease-in-out infinite; }
+
+@keyframes pulso-alerta {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
+/* ---------------------------- Clarão de dano ------------------------------ */
+
+/* Vinheta e não tela cheia: escurecer o centro tiraria a visão exatamente no
+   momento em que o jogador mais precisa dela — que é quando está apanhando. */
+#hud-dano {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 40;
+  background: radial-gradient(ellipse at center,
+    rgba(255, 40, 30, 0) 42%,
+    rgba(255, 30, 24, 0.42) 100%);
+}
+
+/* A animação é reiniciada removendo e readicionando a classe (ver
+   `HUD.pulsarDano`): sem isso, duas mordidas seguidas dentro da duração do
+   pulso não produziriam clarão nenhum na segunda. */
+#hud-dano.bater { animation: clarao-dano 0.45s ease-out; }
+
+@keyframes clarao-dano {
+  0%   { opacity: 0.95; }
+  100% { opacity: 0; }
+}
+
+/* O escudo subindo tem de se distinguir do escudo parado: sem isso o jogador
+   não sabe se vale esperar mais dois segundos ou correr. A transição de largura
+   já está no `.fill`, então basta o pulso. */
+.fill--shield.regen { animation: pulso-escudo 0.9s ease-in-out infinite; }
+
+@keyframes pulso-escudo {
+  0%, 100% { filter: brightness(1); }
+  50%      { filter: brightness(1.7); }
+}
 .fill--atmo     { background: linear-gradient(90deg, #7a4b16, var(--warn)); }
 .fill--jetpack  { background: linear-gradient(90deg, #4b3b86, var(--jet)); }
 

@@ -166,7 +166,21 @@ export class GameState {
     _groundColor.fromArray(planet.config.palette.dry);
     this.ambientLight.color.copy(_skyColor).multiplyScalar(0.6 + day * 0.4);
     this.ambientLight.groundColor.copy(_groundColor);
-    this.ambientLight.intensity = 0.04 + atmo * day * 0.9;
+    // -----------------------------------------------------------------------
+    // DERRUBADA A UM TERÇO DESDE QUE EXISTE IBL.
+    //
+    // O mapa de ambiente (`CeuAmbiente.js`) agora entrega a MESMA luz de céu, e
+    // com direção. Manter a hemisférica no valor antigo somaria o preenchimento
+    // duas vezes: a cena ficava clara demais e, pior, sem contraste — luz
+    // ambiente é justamente o que apaga a sombra recém-conquistada. O que
+    // sobra existe para dar um piso de leitura ao lado escuro dos objetos.
+    // -----------------------------------------------------------------------
+    this.ambientLight.intensity = 0.02 + atmo * day * 0.3;
+
+    // O IBL sobe com a atmosfera pelo motivo oposto: no vácuo não há céu para
+    // espalhar, e um ambiente forte no espaço apagaria o contraste altíssimo
+    // que é a assinatura visual de estar fora de qualquer ar.
+    this.engine.scene.environmentIntensity = 0.25 + atmo * day * 0.85;
 
     // --- Luz do sol ---------------------------------------------------------
     // A direcional é a MESMA para todo o sistema (é uma estrela só), mas a cor

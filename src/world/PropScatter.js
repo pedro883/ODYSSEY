@@ -179,7 +179,12 @@ export class PropScatter {
       // uma esfera envolvente global não descartaria nada e ainda custaria
       // um teste por frame.
       mesh.frustumCulled = false;
-      mesh.castShadow = false;
+      // Estas são as sombras que o jogador de fato LÊ: a mancha da copa no chão
+      // é o que transforma um campo verde chapado em terreno com volume. Um
+      // `InstancedMesh` custa um desenho por passe, não um por árvore, então
+      // ligar isto é barato mesmo com milhares de instâncias.
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
       this.group.add(mesh);
 
       const hsl = { h: 0, s: 0, l: 0 };

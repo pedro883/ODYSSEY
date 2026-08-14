@@ -18,7 +18,19 @@ import * as THREE from 'three';
 import { createClouds } from '../shaders/CloudShader.js';
 
 /** Acima desta distância da superfície, a camada é desligada por completo. */
-const CULL_DISTANCE = 12;
+/**
+ * Raio de corte das nuvens, em múltiplos da casca externa.
+ *
+ * Caiu de 12 para 4,5 depois de medir. Com 12, um sistema de cinco corpos
+ * desenhava CINCO cascas de ray marching ao mesmo tempo — inclusive planetas a
+ * oitenta mil unidades —, e as dos corpos que não eram o ativo custavam juntas
+ * mais que a do planeta em que o jogador estava pousado.
+ *
+ * O que se perde é desprezível: a essa distância a nuvem já está no fim do
+ * desvanecimento e o que se vê do planeta é o disco e o halo da atmosfera, que
+ * continuam desenhados normalmente e custam uma fração disto.
+ */
+const CULL_DISTANCE = 4.5;
 
 /* ========================================================================== */
 /* Qualidade global                                                           */
@@ -97,6 +109,29 @@ export const cloudQuality = {
       this.tier = forced;
       this.auto = false;
     }
+  },
+
+  /**
+   * Fixa o nível a partir das preferências do jogador.
+   *
+   * O automático continua existindo e é o padrão: ele é o que adapta o mesmo
+   * build a uma integrada e a uma RTX. Mas quem entrou nas opções e escolheu um
+   * nível está dizendo que quer AQUELE, e um controlador que o sobrescrevesse
+   * três segundos depois seria simplesmente um controle quebrado.
+   *
+   * @param {number} tier índice em `TIERS`, ou -1 para desligar
+   * @param {boolean} auto deixar o controlador ajustar a partir daqui
+   */
+  aplicar(tier, auto) {
+    this.tier = Math.max(-1, Math.min(TIERS.length - 1, tier));
+    this.auto = !!auto;
+    this._cooldown = 3;
+    this._headroom = 0;
+  },
+
+  /** Nomes dos níveis, para a interface montar a lista sem duplicá-los. */
+  get niveis() {
+    return TIERS.map((t) => t.name);
   },
 
   /** Troca de nível avisando no console — é assim que se descobre que o

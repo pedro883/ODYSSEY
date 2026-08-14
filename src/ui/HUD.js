@@ -61,6 +61,8 @@ export class HUD {
       throttle: el('hud-throttle'),
       jetpack: el('hud-jetpack'),
       shield: el('hud-shield'),
+      health: el('hud-health'),
+      dano: el('hud-dano'),
       atmo: el('hud-atmo'),
     };
 
@@ -168,6 +170,46 @@ export class HUD {
   }
 
   /**
+   * Clarão vermelho ao levar dano.
+   *
+   * A classe é REMOVIDA e readicionada com um reflow forçado no meio. Só
+   * readicionar não funciona: se a classe já está lá, o navegador não considera
+   * que houve mudança e a animação não reinicia — duas mordidas dentro dos 0,45 s
+   * do pulso produziriam um clarão só, justamente quando o jogador está sob o
+   * ataque mais intenso e mais precisa do aviso.
+   */
+  /**
+   * Nível de alerta das sentinelas.
+   *
+   * O DOM só é tocado quando o nível MUDA. Reescrever `textContent` a cada
+   * quadro obrigaria o navegador a refazer o layout do elemento sessenta vezes
+   * por segundo para desenhar exatamente as mesmas estrelas.
+   *
+   * @param {number} nivel 0..5
+   */
+  alerta(nivel) {
+    if (nivel === this._nivelAlerta) return;
+    this._nivelAlerta = nivel;
+
+    const el = document.getElementById('hud-alerta');
+    if (!el) return;
+
+    el.classList.toggle('off', nivel <= 0);
+    el.classList.toggle('grave', nivel >= 3);
+    if (nivel > 0) {
+      el.querySelector('.estrelas').textContent = '★'.repeat(nivel) + '☆'.repeat(5 - nivel);
+    }
+  }
+
+  pulsarDano() {
+    const el = this.bars.dano;
+    if (!el) return;
+    el.classList.remove('bater');
+    void el.offsetWidth; // força o reflow que valida a remoção
+    el.classList.add('bater');
+  }
+
+  /**
    * @param {number} dt
    * @param {object} data
    */
@@ -177,6 +219,11 @@ export class HUD {
     this.bars.throttle.style.width = `${(data.throttle * 100).toFixed(0)}%`;
     this.bars.jetpack.style.width = `${(data.jetpack * 100).toFixed(0)}%`;
     this.bars.shield.style.width = `${(data.shield * 100).toFixed(0)}%`;
+    this.bars.health.style.width = `${(data.health * 100).toFixed(0)}%`;
+    // `toggle` com o segundo argumento não mexe no DOM quando o estado já é o
+    // pedido, então isto pode rodar a cada quadro sem custo de reflow.
+    this.bars.shield.classList.toggle('regen', !!data.escudoRegenerando);
+    this.alerta(data.alerta ?? 0);
     this.bars.atmo.style.width = `${(data.atmosphere * 100).toFixed(0)}%`;
 
     this.miningArc.style.strokeDashoffset =

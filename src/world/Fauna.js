@@ -24,6 +24,7 @@ import * as THREE from 'three';
 import { mulberry32 } from '../shared/noise.js';
 import { assets } from '../assets/AssetLibrary.js';
 import { FAUNA_SPECIES } from '../assets/manifest.js';
+import { Vitais } from '../game/Vitals.js';
 
 /** Criaturas vivas ao mesmo tempo. Ver a nota de custo acima. */
 const POOL_SIZE = 12;
@@ -39,6 +40,51 @@ const DESPAWN = 150;
 const FLEE_RADIUS = 15;
 const FLEE_SPEED = 2.4;
 
+/**
+ * A que distância um predador NOTA o jogador.
+ *
+ * Maior que o raio de fuga de propósito: o herbívoro só reage quando o jogador
+ * quase encosta, o predador decide bem antes. É o que faz um encontro hostil
+ * parecer uma caçada em vez de um susto.
+ */
+const RAIO_DETECCAO = 34;
+
+/**
+ * A que distância ele desiste.
+ *
+ * MAIOR que o de detecção, e a diferença é o que impede a criatura de piscar
+ * entre perseguir e passear quando o jogador anda exatamente na fronteira —
+ * histerese, o mesmo motivo pelo qual um termostato tem duas temperaturas.
+ */
+const RAIO_DESISTIR = 58;
+
+/** Distância em que a mordida acerta. */
+const ALCANCE_ATAQUE = 2.6;
+
+/** Multiplicador de velocidade na perseguição. */
+const CHASE_SPEED = 2.8;
+
+/**
+ * Segundos perseguindo depois de perder o jogador de vista.
+ *
+ * Sem esta memória, sair do raio por um instante (pular uma pedra, contornar
+ * uma árvore) zeraria a perseguição na hora e nenhum predador jamais alcançaria
+ * ninguém.
+ */
+const MEMORIA_CACADA = 4;
+
+/** Segundos que uma criatura dócil permanece hostil depois de levar tiro. */
+const IRRITACAO = 18;
+
+/**
+ * Raio de perseguição de quem foi baleado.
+ *
+ * Bem maior que o de detecção, e ainda assim MUITO menor que o alcance do
+ * blaster (400): abater de longe continua sendo uma tática válida, só deixa de
+ * ser gratuita quando se erra o primeiro tiro.
+ */
+const RAIO_IRRITADA = 120;
+
 const BASE_SPEED = 3.2;
 
 const _up = new THREE.Vector3();
@@ -48,6 +94,8 @@ const _quat = new THREE.Quaternion();
 const _yawQuat = new THREE.Quaternion();
 const _delta = new THREE.Vector3();
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
+/** Temporário exclusivo de `alvos()`: `_up` é usado por `_updateCreature`. */
+const _alvoCima = new THREE.Vector3();
 const _box = new THREE.Box3();
 const _size = new THREE.Vector3();
 
@@ -62,6 +110,18 @@ export class Fauna {
     /** @type {Array<object>} */
     this.creatures = [];
     this.enabled = false;
+
+    /**
+     * Avisado quando um predador acerta uma mordida.
+     *
+     * O dano NÃO é aplicado aqui. Quem sabe o que é o jogador — e se ele está a
+     * pé, dentro da nave ou dentro de uma base — é o laço principal. A fauna só
+     * informa que acertou e com quanto. É a mesma separação que mantém `Vitais`
+     * sem saber o que é um jogador.
+     *
+     * @type {((dano: number, criatura: object) => void) | null}
+     */
+    this.aoAtacar = null;
 
     const rand = mulberry32((planet.config.seed ^ 0x7f4a7c15) >>> 0);
 
@@ -114,6 +174,13 @@ export class Fauna {
     return this.creatures.length;
   }
 
+  /** Criaturas caçando o jogador neste instante — a interface avisa o perigo. */
+  get cacando() {
+    let n = 0;
+    for (const c of this.creatures) if (c.cacada > 0) n++;
+    return n;
+  }
+
   /** Nomes das espécies presentes — usado pelo scanner/catálogo. */
   speciesNames() {
     return this.species.map((e) => e.nome);
@@ -124,8 +191,20 @@ export class Fauna {
    * @param {THREE.Vector3} reference posição do jogador/nave
    * @param {number} altitude altitude atual acima da superfície
    */
-  update(dt, reference, altitude) {
+  update(dt, reference, altitude, fatorDia = 1) {
     if (!this._ready) return;
+
+    // Noite = sol abaixo do horizonte. O limiar é generoso (0,25 e não 0) para
+    // que as criaturas noturnas apareçam junto com o crepúsculo, e não num
+    // instante exato em que o mundo já está escuro há minutos.
+    // Recalculado só na VIRADA, não a cada quadro: `filter` aloca um array, e
+    // sessenta arrays por segundo jogados fora é exatamente o tipo de lixo que
+    // acorda o coletor no meio do jogo.
+    const noite = fatorDia < 0.25;
+    if (noite !== this._noite || !this._elegiveis) {
+      this._noite = noite;
+      this._elegiveis = noite ? this.species : this.species.filter((e) => !e.noturno);
+    }
 
     const deveEstarAtiva = altitude < ACTIVE_ALTITUDE;
     if (deveEstarAtiva !== this.enabled) {
@@ -143,7 +222,30 @@ export class Fauna {
 
     for (let i = this.creatures.length - 1; i >= 0; i--) {
       const criatura = this.creatures[i];
-      if (criatura.object.position.distanceTo(reference) > DESPAWN) {
+      // ---------------------------------------------------------------------
+      // A POSIÇÃO PRECISA VIRAR MUNDO ANTES DA COMPARAÇÃO.
+      //
+      // `object.position` é LOCAL ao grupo do planeta e `reference` é de cena.
+      // Os dois coincidem enquanto o planeta está na origem — que é o caso no
+      // primeiro minuto de jogo, e por isso o defeito passou despercebido. Ao
+      // primeiro rebase da origem flutuante o grupo do planeta ganha um
+      // deslocamento de milhares de unidades, a distância medida estoura o
+      // `DESPAWN` para TODA criatura, e a fauna some do planeta inteiro no
+      // quadro seguinte ao nascimento.
+      //
+      // O sintoma era "não tem bicho nenhum neste mundo", com o contador em
+      // zero e nenhum erro no console. `_updateCreature` já fazia a conversão
+      // certa logo abaixo; só esta linha ficou para trás.
+      // ---------------------------------------------------------------------
+      _delta.copy(criatura.object.position).add(this.planet.group.position);
+      if (_delta.distanceTo(reference) > DESPAWN) {
+        this._remove(i);
+        continue;
+      }
+      // Abatida: sai no mesmo lugar em que a distância a tira. Some na hora,
+      // sem animação de morte — os modelos do pacote não têm clipe para isso, e
+      // deixar o corpo parado em pose de caminhada seria pior que removê-lo.
+      if (!criatura.vitais.vivo) {
         this._remove(i);
         continue;
       }
@@ -151,8 +253,47 @@ export class Fauna {
     }
   }
 
+  /**
+   * Criaturas atacáveis, em espaço de CENA.
+   *
+   * A conversão acontece aqui, e não em quem atira, porque só a fauna sabe que
+   * suas posições são locais ao grupo do planeta. Reaproveita os objetos do
+   * array entre chamadas: isto roda todo quadro durante o combate, e alocar
+   * doze objetos por quadro é exatamente o tipo de lixo que faz o coletor
+   * acordar no pior momento.
+   *
+   * @param {Array} [saida]
+   */
+  alvos(saida = this._alvos ?? (this._alvos = [])) {
+    saida.length = 0;
+    for (const criatura of this.creatures) {
+      if (!criatura.vitais.vivo) continue;
+      const slot = criatura._slotAlvo ?? (criatura._slotAlvo = { posicao: new THREE.Vector3() });
+      slot.posicao.copy(criatura.object.position).add(this.planet.group.position);
+      // Meio corpo acima do pé: a origem do modelo fica no chão, e mirar nela
+      // exigiria acertar os tornozelos. O "para cima" é a normal do planeta,
+      // que é a própria posição local normalizada.
+      _alvoCima.copy(criatura.object.position).normalize();
+      slot.posicao.addScaledVector(_alvoCima, (criatura.especie.altura ?? 1.4) * 0.5);
+      slot.raio = criatura.raioAlvo;
+      slot.vitais = criatura.vitais;
+      slot.criatura = criatura;
+      saida.push(slot);
+    }
+    return saida;
+  }
+
   _spawn(reference) {
-    const especie = this.species[(this._rand() * this.species.length) | 0];
+    // ---------------------------------------------------------------------
+    // SORTEIO ENTRE AS ESPÉCIES ELEGÍVEIS AGORA, não entre todas.
+    //
+    // Sortear em toda a lista e rejeitar as noturnas de dia pareceria
+    // equivalente e não é: o `while` de repovoamento em `update` para no
+    // primeiro `null`, então uma rejeição travaria o pool inteiro naquele
+    // quadro. Com a lista já filtrada, todo sorteio devolve alguém.
+    // ---------------------------------------------------------------------
+    const elegiveis = this._elegiveis;
+    const especie = elegiveis[(this._rand() * elegiveis.length) | 0];
     if (!especie) return null;
 
     // Anel ao redor do jogador: perto o bastante para ser visto, longe o
@@ -197,8 +338,47 @@ export class Fauna {
       especie,
       estado: '',
       timer: 0,
+      /**
+       * Vitais da criatura.
+       *
+       * Escudo zero de propósito: escudo é tecnologia, e um bicho não tem. A
+       * classe aceita isso sem caso especial — dano com escudo em zero vai
+       * inteiro para a blindagem, que é exatamente a regra que se quer aqui.
+       *
+       * A vida escala com a altura da espécie: acertar um bicho do tamanho de
+       * um cavalo não pode custar o mesmo que acertar um do tamanho de um
+       * cachorro, e a altura é a única medida de porte que já existe.
+       */
+      vitais: new Vitais({
+        escudoMaximo: 0,
+        vidaMaxima: Math.round(22 + (especie.altura ?? 1.4) * 26),
+      }),
+      /** Raio de acerto, derivado do porte. Ver `Weapons._cruzaEsfera`. */
+      raioAlvo: Math.max(0.5, (especie.altura ?? 1.4) * 0.42),
+
+      /** Segundos até a próxima mordida poder acertar. */
+      recargaAtaque: 0,
+      /** Segundos restantes de perseguição (ver `MEMORIA_CACADA`). */
+      cacada: 0,
+      /**
+       * Segundos de agressividade adquirida.
+       *
+       * Uma criatura dócil que leva tiro passa a caçar. É a regra que impede o
+       * caso mais indefensável do gênero: abater um bicho pastando, de longe,
+       * sem nenhuma consequência. Também dá ao jogador a informação de que
+       * atirar tem custo, sem precisar de nenhum texto na tela.
+       */
+      irritada: 0,
       heading: _tangent.clone().applyAxisAngle(_up, this._rand() * Math.PI * 2),
       velocidade: 0,
+    };
+
+    // Revide: quem leva tiro passa a caçar, e já sai perseguindo (a `cacada`
+    // começa cheia) para que o primeiro tiro tenha resposta imediata em vez de
+    // esperar a criatura reparar no jogador no quadro seguinte.
+    criatura.vitais.aoLevarDano = () => {
+      criatura.irritada = IRRITACAO;
+      criatura.cacada = MEMORIA_CACADA;
     };
 
     // A posição precisa ser em espaço LOCAL do planeta: o grupo é filho dele.
@@ -244,7 +424,11 @@ export class Fauna {
     if (criatura.estado === estado) return;
 
     const anterior = criatura.acoes[criatura.estado];
-    const proxima = criatura.acoes[estado] ?? criatura.acoes.idle;
+    // `cacar` não é um clipe: é o estado lógico da perseguição, desenhado com a
+    // animação de corrida. Sem este mapeamento ele cairia no `idle` e o predador
+    // deslizaria pelo chão em pose parada.
+    const clipe = estado === 'cacar' ? 'run' : estado;
+    const proxima = criatura.acoes[clipe] ?? criatura.acoes.idle;
     if (!proxima) return;
 
     proxima.reset().setEffectiveWeight(1).play();
@@ -252,6 +436,11 @@ export class Fauna {
 
     criatura.estado = estado;
     criatura.velocidade =
+      // `cacar` reaproveita o clipe de corrida (é o único que os modelos do
+      // pacote têm para deslocamento rápido) mas com velocidade própria: um
+      // predador precisa ser mais rápido que a fuga de um herbívoro, senão a
+      // caçada nunca termina.
+      estado === 'cacar' ? BASE_SPEED * CHASE_SPEED * criatura.especie.velocidade :
       estado === 'run' ? BASE_SPEED * FLEE_SPEED * criatura.especie.velocidade :
       estado === 'walk' ? BASE_SPEED * criatura.especie.velocidade : 0;
   }
@@ -265,6 +454,55 @@ export class Fauna {
     // --- Decisão de estado -------------------------------------------------
     const distanciaJogador = mundo.distanceTo(reference);
     criatura.timer -= dt;
+    if (criatura.recargaAtaque > 0) criatura.recargaAtaque -= dt;
+
+    // ---------------------------------------------------------------------
+    // PREDADOR
+    //
+    // Vem ANTES do bloco de fuga: uma criatura agressiva perto do jogador tem
+    // de atacar, não fugir, e o teste de fuga aceitaria as duas. Trocar a ordem
+    // faria o predador recuar exatamente quando alcança a presa.
+    // ---------------------------------------------------------------------
+    if (criatura.especie.agressivo || criatura.irritada > 0) {
+      if (criatura.irritada > 0) criatura.irritada -= dt;
+
+      // -------------------------------------------------------------------
+      // QUEM LEVOU TIRO ENXERGA MAIS LONGE.
+      //
+      // Com os raios normais, uma criatura baleada de 80 unidades marcava a
+      // irritação e desistia no MESMO quadro — a distância já a punha fora do
+      // raio de desistência. O revide existia no papel e nunca acontecia na
+      // tela, que é o pior tipo de mecânica: a que parece implementada.
+      //
+      // Faz sentido além de conveniente: o bicho não precisa detectar ninguém,
+      // ele acabou de ser atingido e sabe de onde veio.
+      // -------------------------------------------------------------------
+      const irritada = criatura.irritada > 0;
+      const raioDeteccao = irritada ? RAIO_IRRITADA : RAIO_DETECCAO;
+      const raioDesistir = irritada ? RAIO_IRRITADA * 1.6 : RAIO_DESISTIR;
+
+      if (distanciaJogador < raioDeteccao) criatura.cacada = MEMORIA_CACADA;
+      else if (criatura.cacada > 0 && distanciaJogador < raioDesistir) criatura.cacada -= dt;
+      else criatura.cacada = 0;
+
+      if (criatura.cacada > 0) {
+        // Ruma PARA o jogador — o oposto exato da fuga logo abaixo.
+        _away.copy(reference).sub(mundo);
+        _away.addScaledVector(_up, -_away.dot(_up));
+        if (_away.lengthSq() > 1e-6) criatura.heading.copy(_away).normalize();
+        this._setState(criatura, 'cacar');
+        criatura.timer = 0.6;
+
+        if (distanciaJogador < ALCANCE_ATAQUE && criatura.recargaAtaque <= 0) {
+          criatura.recargaAtaque = criatura.especie.cadencia ?? 1.2;
+          // O dano não é aplicado aqui: quem sabe o que é o jogador — e se ele
+          // está a pé ou dentro da nave — é o loop. A fauna só avisa que
+          // acertou. É a mesma separação que mantém `Vitais` neutro.
+          this.aoAtacar?.(criatura.especie.dano ?? 8, criatura);
+        }
+        return this._mover(criatura, dt, _up);
+      }
+    }
 
     if (distanciaJogador < FLEE_RADIUS) {
       // Foge na direção oposta ao jogador, projetada no plano tangente.
@@ -288,7 +526,20 @@ export class Fauna {
       }
     }
 
-    // --- Movimento ---------------------------------------------------------
+    this._mover(criatura, dt, _up);
+  }
+
+  /**
+   * Passo de movimento, colagem no solo e orientação.
+   *
+   * Extraído de `_updateCreature` quando a perseguição entrou: a caçada decide o
+   * rumo por um caminho próprio e precisa sair da árvore de decisão sem pular o
+   * deslocamento. Duplicar estas trinta linhas no ramo do predador seria a
+   * receita para elas divergirem na primeira correção.
+   */
+  _mover(criatura, dt, _up) {
+    const objeto = criatura.object;
+
     // Reprojeta o rumo no plano tangente todo frame, pelo mesmo motivo do
     // jogador a pé: "para frente" muda conforme se anda sobre a esfera.
     criatura.heading.addScaledVector(_up, -criatura.heading.dot(_up));

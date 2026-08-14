@@ -65,8 +65,58 @@ export function aplicarDetalheDeSuperficie(material, cfg) {
     // e um décimo do empurrão na normal.
     // -----------------------------------------------------------------------
     shader.uniforms.uFreqGrao = { value: 0.085 };
-    shader.uniforms.uForcaGrao = { value: cfg.type === 'exótico' ? 0.085 : 0.06 };
-    shader.uniforms.uForcaRelevo = { value: 1.1 };
+    shader.uniforms.uForcaGrao = { value: cfg.type === 'exótico' ? 0.36 : 0.26 };
+    shader.uniforms.uForcaRelevo = { value: 2.2 };
+
+    // -----------------------------------------------------------------------
+    // AS DUAS ESCALAS GRANDES, E POR QUE ELAS SÃO O QUE FALTAVA.
+    //
+    // O grão acima resolve o pixel a dois metros do olho e some a 700 unidades
+    // — que é o certo, senão vira chiado. Só que a paisagem VISTA DE CIMA é
+    // quase toda feita do que está além disso, e ali não sobrava variação
+    // nenhuma: uma encosta inteira saía com a mesma cor de bioma, chapada,
+    // exatamente o aspecto de "mapa pintado" que se via voando baixo.
+    //
+    //   MACRO (~450 unidades): manchas do tamanho de um vale. É o que dá a
+    //   impressão de solo com história — regiões mais secas, mais úmidas, mais
+    //   pedregosas. NÃO desvanece com a distância, porque a esta escala uma
+    //   feição continua tendo dezenas de pixels mesmo do alto da atmosfera.
+    //
+    //   MESO (~50 unidades): a ponte entre as duas. Sem ela a transição do
+    //   grão para o macro tem um vão visível — o chão fica detalhado até uns
+    //   500 metros e liso logo depois, e a fronteira acompanha a câmera.
+    // -----------------------------------------------------------------------
+    // Calibrado na tela. Estes números só valem lidos junto com `_var` no
+    // fragmento: é ela que leva a excursão do ruído a [-1, 1] e faz "0,26"
+    // significar 26% do efeito no pico. Antes dela os mesmos 0,26 valiam menos
+    // de um décimo disso — ver o comentário longo em `_var`.
+    shader.uniforms.uFreqMacro = { value: 0.0022 };
+    shader.uniforms.uForcaMacro = { value: 0.26 };
+    shader.uniforms.uFreqMeso = { value: 0.02 };
+    shader.uniforms.uForcaMeso = { value: 0.16 };
+
+    // Variação de RUGOSIDADE. É o parâmetro mais subestimado de um material
+    // procedural: duas manchas com a mesma cor e rugosidades diferentes se
+    // separam sozinhas quando o sol rasa, porque uma devolve brilho e a outra
+    // não. É o que distingue pedra polida de terra batida sem trocar a cor de
+    // nenhuma das duas.
+    shader.uniforms.uVarRugosidade = { value: 0.22 };
+
+    // Exposto para calibração ao vivo: sem isto, ajustar qualquer um destes
+    // números exige recarregar a página e esperar o mundo inteiro reaparecer, o
+    // que na prática significa calibrar no escuro.
+    material.userData.detalhe = shader.uniforms;
+
+    // Cópia dos valores de projeto, para quem os desliga saber ao que voltar.
+    // Guardada AQUI e não em quem desliga: ler o valor corrente para "lembrar"
+    // dele grava zero se o desligamento acontecer duas vezes seguidas, e o
+    // detalhe nunca mais volta.
+    material.userData.detalhePadrao = {
+      grao: shader.uniforms.uForcaGrao.value,
+      relevo: shader.uniforms.uForcaRelevo.value,
+      macro: shader.uniforms.uForcaMacro.value,
+      meso: shader.uniforms.uForcaMeso.value,
+    };
 
     shader.vertexShader = shader.vertexShader
       .replace(
@@ -101,6 +151,14 @@ export function aplicarDetalheDeSuperficie(material, cfg) {
         uniform float uFreqGrao;
         uniform float uForcaGrao;
         uniform float uForcaRelevo;
+        uniform float uFreqMacro;
+        uniform float uForcaMacro;
+        uniform float uFreqMeso;
+        uniform float uForcaMeso;
+        uniform float uVarRugosidade;
+        // Compartilhado entre o bloco de cor e o de rugosidade, que são dois
+        // pontos de injeção separados no shader do three.
+        float _campoLento;
 
         float _hash(vec3 p) {
           p = fract(p * 0.3183099 + vec3(0.71, 0.113, 0.419));
@@ -123,30 +181,100 @@ export function aplicarDetalheDeSuperficie(material, cfg) {
         float _fbm(vec3 p) {
           return _ruido(p) * 0.55 + _ruido(p * 2.7) * 0.28 + _ruido(p * 6.1) * 0.17;
         }
+
+        // ---------------------------------------------------------------
+        // NORMALIZAÇÃO, E O ERRO QUE ELA CONSERTA.
+        //
+        // Todo ajuste deste arquivo escalava (_fbm - 0.5) direto por uma
+        // "força", e eu tratava esse termo como se cobrisse [-0.5, 0.5]. Não
+        // cobre. Cada oitava é ruído de valor, que já se concentra perto de
+        // 0.5, e a soma ponderada de três delas concentra mais ainda — na
+        // prática a excursão fica em torno de +/- 0.17.
+        //
+        // O efeito era um multiplicador silencioso de UM TERÇO em cima de cada
+        // número calibrado: a força 0.06 do grão valia 0.02, e nenhuma delas
+        // aparecia na tela. Passei três rodadas de captura convencido de que o
+        // problema era a fórmula de cor.
+        //
+        // Com a excursão levada a [-1, 1] aqui, cada "força" abaixo passa a
+        // significar de fato a fração do efeito no seu pico.
+        // ---------------------------------------------------------------
+        float _var(vec3 p) {
+          return clamp((_fbm(p) - 0.5) * 3.0, -1.0, 1.0);
+        }
         `
       )
       .replace(
         '#include <color_fragment>',
         /* glsl */ `
         #include <color_fragment>
+
+        // --- Escalas que sobrevivem à distância --------------------------
+        float _macro = _var(vPosMundo * uFreqMacro);
+        // O meso desvanece, mas MUITO mais longe que o grão: a 6 km uma feição
+        // de 50 unidades já é subpixel e voltaria a cintilar.
+        float _longe = 1.0 - smoothstep(2500.0, 6000.0, vDistCam);
+        float _meso = _var(vPosMundo * uFreqMeso) * _longe;
+        _campoLento = _macro * uForcaMacro + _meso * uForcaMeso;
+
+        {
+          // Mesmo princípio do grão fino: a maior parte vai para a saturação.
+          // Aqui, porém, entra também um deslocamento de MATIZ — na escala do
+          // vale, terreno real não muda só de intensidade, muda de cor (verde
+          // que puxa para o oliva, areia que puxa para o ocre). Um giro
+          // pequeno, feito trocando a proporção entre os canais, custa três
+          // multiplicações e faz mais pela paisagem que qualquer outra linha
+          // deste arquivo.
+          float _cinza = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+          diffuseColor.rgb = mix(vec3(_cinza), diffuseColor.rgb, 1.0 + _campoLento * 0.55);
+          diffuseColor.rgb *= 1.0 + _campoLento * 0.22;
+          diffuseColor.rgb *= vec3(
+            1.0 + _campoLento * 0.10,
+            1.0 + _campoLento * 0.02,
+            1.0 - _campoLento * 0.09
+          );
+        }
+
         // Some com a distância: ruído de alta frequência a quilômetros de
         // distância é menor que um pixel e vira cintilação.
         float _perto = 1.0 - smoothstep(120.0, 700.0, vDistCam);
         if (_perto > 0.001) {
           vec3 _p = vPosMundo * uFreqGrao;
-          float _manchas = _fbm(_p) - 0.5;          // ~12 unidades
-          float _fino = _ruido(_p * 4.0) - 0.5;     // ~3 unidades
+          float _manchas = _var(_p);                        // ~12 unidades
+          float _fino = clamp((_ruido(_p * 4.0) - 0.5) * 2.4, -1.0, 1.0); // ~3
 
           // A variação vai quase toda para a SATURAÇÃO e um pouco para o
           // brilho, e não o contrário: escurecer e clarear em alta frequência
           // é o que produzia aspecto de sujeira. Empobrecer/enriquecer a cor
           // lê como terra batida, musgo e pedra — material, não poeira.
-          float _v = _manchas * 0.75 + _fino * 0.25;
+          // O peso migrou de 0,75/0,25 para cá depois de ver o resultado: com a
+          // mancha grande dominando, o chão ganhava manchas suaves de dois
+          // dígitos de metros e lia como NÓDOA — terra molhada, sombra de nuvem
+          // mal feita — em vez de material. É a escala de ~3 unidades que o olho
+          // interpreta como grão de solo, e ela precisava de peso comparável.
+          float _v = _manchas * 0.55 + _fino * 0.45;
           float _cinza = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-          diffuseColor.rgb = mix(vec3(_cinza), diffuseColor.rgb, 1.0 + _v * uForcaGrao * 3.0 * _perto);
-          diffuseColor.rgb *= 1.0 + _v * uForcaGrao * 0.7 * _perto;
+          float _g = _v * uForcaGrao * _perto;
+          diffuseColor.rgb = mix(vec3(_cinza), diffuseColor.rgb, 1.0 + _g * 1.6);
+          diffuseColor.rgb *= 1.0 + _g * 0.45;
+          // Um empurrão de matiz também aqui: musgo puxa para o verde-azulado,
+          // terra exposta para o ocre. Sem ele a grama fica com uma cor só,
+          // apenas mais clara em alguns pontos — que é como se lê um lençol
+          // amassado, não um campo.
+          diffuseColor.rgb *= vec3(1.0 + _g * 0.22, 1.0, 1.0 - _g * 0.18);
         }
 `
+      )
+      .replace(
+        '#include <roughnessmap_fragment>',
+        /* glsl */ `
+        #include <roughnessmap_fragment>
+        // Depende de _campoLento, que o bloco de cor já preencheu — a ordem dos
+        // includes do three garante isso (color_fragment vem antes deste).
+        // Preso ao intervalo válido: rugosidade fora de [0,1] devolve NaN no
+        // termo especular e o pixel sai preto.
+        roughnessFactor = clamp(roughnessFactor + _campoLento * uVarRugosidade, 0.08, 1.0);
+        `
       )
       .replace(
         '#include <normal_fragment_maps>',

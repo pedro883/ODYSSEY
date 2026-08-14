@@ -19,7 +19,7 @@
 
       Exemplo:  content="wss://seudominio.com/mp"
     -->
-    <meta name="nms-mp-server" content="" />
+    <meta name="nms-mp-server" content="wss://junkyard-cytoplasm-wing.ngrok-free.dev" />
 
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
@@ -49,6 +49,10 @@
         <div class="meter">
           <label>ESCUDO</label>
           <div class="bar"><div id="hud-shield" class="fill fill--shield"></div></div>
+        </div>
+        <div class="meter">
+          <label>BLINDAGEM</label>
+          <div class="bar"><div id="hud-health" class="fill fill--health"></div></div>
         </div>
         <div class="meter">
           <label>ATMOSFERA</label>
@@ -164,6 +168,13 @@
       </div>
 
       <!-- Avisos e descobertas -->
+      <!-- Clarão vermelho ao levar dano. Fora dos painéis e sem captura de
+           clique: cobre a tela inteira e não pode interceptar o mouse. -->
+      <div id="hud-dano"></div>
+
+      <!-- Nível de alerta das sentinelas. Vazio e oculto em nível zero: um
+           medidor sempre presente ensinaria o jogador a ignorá-lo. -->
+      <div id="hud-alerta" class="off"><span class="estrelas"></span><b>PROCURADO</b></div>
       <div id="hud-banner"></div>
       <div id="discovery" class="hidden">
         <div class="disc-tag">DESCOBERTA REGISTRADA</div>
@@ -172,6 +183,58 @@
         <div class="disc-units" id="disc-units">+0 unidades</div>
       </div>
     </div>
+
+    <!--
+      ================= Menu de pausa =================
+
+      IRMÃO do #hud, e nunca filho dele. Duas razões, e as duas já custaram um
+      relato de "não consigo clicar no menu":
+
+        1. `#hud` é `pointer-events: none` — ele é uma camada de leitura. Filhos
+           herdam isso, então o menu inteiro ficava visível e inerte.
+        2. `#hud.hidden` zera a opacidade. Com o HUD escondido (tela inicial,
+           mapa galáctico) o menu sumiria junto.
+    -->
+    <div id="pausa" class="hidden">
+        <div class="pausa-caixa">
+          <header>PAUSADO</header>
+
+          <section class="pausa-secao">
+            <h3>GRÁFICOS</h3>
+            <div class="opcao">
+              <label>PREDEFINIÇÃO</label>
+              <div class="botoes" id="op-predef"></div>
+            </div>
+            <div class="opcao">
+              <label>ESCALA DE RESOLUÇÃO <b id="op-escala-valor">—</b></label>
+              <input type="range" id="op-escala" min="40" max="100" step="5" />
+            </div>
+            <div class="opcao">
+              <label>LIMITE DE PIXELS <b id="op-ratio-valor">—</b></label>
+              <input type="range" id="op-ratio" min="10" max="20" step="5" />
+            </div>
+            <div class="opcao">
+              <label>NUVENS</label>
+              <div class="botoes" id="op-nuvens"></div>
+            </div>
+            <div class="opcao alternar">
+              <label for="op-sombras">SOMBRAS</label>
+              <input type="checkbox" id="op-sombras" />
+            </div>
+            <div class="opcao alternar">
+              <label for="op-pos">PÓS-PROCESSAMENTO</label>
+              <input type="checkbox" id="op-pos" />
+            </div>
+            <div class="opcao alternar">
+              <label for="op-detalhe">DETALHE DO TERRENO</label>
+              <input type="checkbox" id="op-detalhe" />
+            </div>
+          </section>
+
+          <p class="pausa-dica" id="pausa-medida">—</p>
+          <button id="pausa-voltar">VOLTAR AO JOGO</button>
+        </div>
+      </div>
 
     <!--
       ================= Mapa galáctico (N) =================

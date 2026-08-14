@@ -138,6 +138,20 @@ export function createShip() {
   thrustLight.position.set(0, 0, 2.0);
   group.add(thrustLight);
 
+  // Percorrido no fim, e não peça por peça: o casco pode vir de um modelo
+  // carregado (`modelHull`), cuja hierarquia interna não conhecemos aqui. A
+  // sombra da nave pousada no chão é a única pista visual de que ela está
+  // APOIADA e não flutuando um metro acima do terreno.
+  group.traverse((o) => {
+    if (o.isMesh) {
+      o.castShadow = true;
+      o.receiveShadow = true;
+    }
+  });
+  // O disco de propulsão é aditivo e sem profundidade: como projetor ele viraria
+  // um retângulo opaco no chão atrás da nave.
+  for (const glow of engineGlows) glow.castShadow = false;
+
   return {
     group,
 

@@ -43,6 +43,15 @@ import { audio } from './audio/AudioEngine.js';
 import { FloatingOrigin } from './core/FloatingOrigin.js';
 import { Multiplayer } from './net/Multiplayer.js';
 import { Weather, CLIMAS } from './world/Weather.js';
+import { SombrasDoSol } from './world/Sombras.js';
+import { CeuAmbiente } from './world/CeuAmbiente.js';
+import { Vitais } from './game/Vitals.js';
+import { Projeteis } from './game/Weapons.js';
+import { Blaster } from './game/Blaster.js';
+import { EDICAO } from './shared/edits.js';
+import { Sentinelas } from './game/Sentinelas.js';
+import { Qualidade } from './game/Qualidade.js';
+import { MenuPausa } from './ui/MenuPausa.js';
 
 /* ========================================================================== */
 /* Seed                                                                       */
@@ -192,6 +201,267 @@ const warpLines = new WarpLines(engine.scene);
 
 const gameState = new GameState(engine, starSystem);
 const weather = new Weather(engine.scene, gameState);
+const sombras = new SombrasDoSol(engine.renderer, starSystem.sunLight);
+
+/* ========================================================================== */
+/* Qualidade gráfica                                                          */
+/* ========================================================================== */
+
+const qualidade = new Qualidade();
+
+/**
+ * Aplica as preferências a quem as consome.
+ *
+ * Um ponto só, chamado no boot e a cada mudança no menu. A alternativa — cada
+ * subsistema lendo as preferências por conta própria — espalharia a ordem de
+ * aplicação por seis arquivos, e a ordem importa: o detalhe de superfície é
+ * escrito em uniformes que só existem depois de o material compilar.
+ */
+function aplicarQualidade() {
+  engine.definirTetoPixelRatio(qualidade.tetoPixelRatio);
+  engine.definirEscalaResolucao(qualidade.escalaResolucao);
+  engine.definirPos(qualidade.pos);
+  sombras.definir(qualidade.sombras);
+  cloudQuality.aplicar(qualidade.nuvens, qualidade.nuvensAuto);
+
+  // O detalhe procedural do terreno é caro em fragmento (três oitavas de ruído
+  // mais o gradiente para a normal) e é a primeira coisa que se pode perder sem
+  // que a silhueta do mundo mude. Zerar as forças é mais barato que recompilar
+  // um shader sem o bloco.
+  for (const planeta of starSystem.planets) {
+    const dados = planeta.chunks.material.userData;
+    const u = dados.detalhe;
+    const p = dados.detalhePadrao;
+    if (!u || !p) continue;
+
+    // O grão fino e o relevo são o que custa: alta frequência, avaliada por
+    // fragmento, mais três amostras extras para o gradiente da normal. As
+    // escalas macro e meso ficam mesmo no modo econômico — elas custam duas
+    // avaliações de ruído e são o que impede o terreno de virar chapa lisa.
+    const ligado = qualidade.detalheTerreno;
+    u.uForcaGrao.value = ligado ? p.grao : 0;
+    u.uForcaRelevo.value = ligado ? p.relevo : 0;
+  }
+}
+
+qualidade.aoMudar(aplicarQualidade);
+aplicarQualidade();
+
+/**
+ * Custo de GPU por quadro, em milissegundos.
+ *
+ * Usa `EXT_disjoint_timer_query_webgl2`, que é a única forma de medir o que a
+ * GPU realmente gastou: o relógio da CPU só mede quanto tempo levou para
+ * ENFILEIRAR os comandos, e num pipeline como este ele devolve valores dez
+ * vezes menores que a verdade. Devolve `null` onde a extensão não existe (é
+ * opcional, e alguns navegadores a escondem por impressão digital).
+ */
+async function medirGpu(repeticoes = 24) {
+  const gl = engine.renderer.getContext();
+  const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+  if (!ext) return null;
+
+  for (let i = 0; i < 4; i++) engine.render(); // aquece: shader e cache
+  const consulta = gl.createQuery();
+  gl.beginQuery(ext.TIME_ELAPSED_EXT, consulta);
+  for (let i = 0; i < repeticoes; i++) engine.render();
+  gl.endQuery(ext.TIME_ELAPSED_EXT);
+
+  // Prazo por RELÓGIO, não por número de tentativas: numa aba em segundo plano
+  // o navegador estrangula `setTimeout` para um disparo por segundo, e um laço
+  // de 120 tentativas passaria dois minutos preso mostrando "medindo…". Dois
+  // segundos de parede é mais que suficiente — a consulta normalmente fica
+  // pronta no quadro seguinte.
+  const prazo = performance.now() + 2000;
+  while (performance.now() < prazo) {
+    await new Promise((r) => setTimeout(r, 16));
+    // `GPU_DISJOINT` significa que o driver preemptou a fila no meio da medida;
+    // o resultado existe mas não vale nada.
+    if (gl.getParameter(ext.GPU_DISJOINT_EXT)) break;
+    if (gl.getQueryParameter(consulta, gl.QUERY_RESULT_AVAILABLE)) {
+      const ns = gl.getQueryParameter(consulta, gl.QUERY_RESULT);
+      gl.deleteQuery(consulta);
+      return ns / 1e6 / repeticoes;
+    }
+  }
+  gl.deleteQuery(consulta);
+  return null;
+}
+
+const menuPausa = new MenuPausa(qualidade, {
+  niveisDeNuvem: cloudQuality.niveis,
+  medir: () => medirGpu(),
+  aoFechar: () => {
+    requestPointerLock();
+  },
+});
+const ceuAmbiente = new CeuAmbiente(engine.renderer, engine.scene);
+
+// -----------------------------------------------------------------------------
+// VITAIS
+//
+// Duas instâncias, e não uma: o jogador e a nave são alvos separados, com
+// capacidades diferentes, e o dano num não pode escorrer para o outro. A nave
+// aguenta bem mais porque quem atira nela são canhões de outra nave, não uma
+// mordida — e porque perder a nave num planeta é bem pior que morrer a pé.
+//
+// Nada causa dano ainda; isto é a base que as armas, a fauna hostil e os drones
+// vão usar. Ver `src/game/Vitals.js`.
+// -----------------------------------------------------------------------------
+const vitaisJogador = new Vitais({ escudoMaximo: 100, vidaMaxima: 100 });
+const vitaisNave = new Vitais({ escudoMaximo: 260, vidaMaxima: 180 });
+
+const projeteis = new Projeteis(engine.scene);
+const blaster = new Blaster(projeteis);
+
+/**
+ * Quem atirou, para o projétil não acertar o próprio atirador.
+ *
+ * Um objeto vazio serve: a comparação é por identidade. Uma string ("jogador")
+ * pareceria mais legível e criaria uma colisão silenciosa no dia em que outro
+ * jogador da sala atirasse com o mesmo rótulo.
+ */
+const jogadorComoDono = {};
+
+const sentinelas = new Sentinelas(engine.scene, projeteis);
+
+/**
+ * O jogador como ALVO, na mesma forma que a fauna e os drones.
+ *
+ * Poderia ser um caso especial dentro de `Projeteis` — "se o tiro é de um
+ * inimigo, testar contra o jogador" — e seria pior: passariam a existir duas
+ * regras de acerto, uma para o jogador e outra para todo o resto, livres para
+ * divergirem na primeira correção. Aqui o teste de segmento contra esfera é
+ * literalmente o mesmo.
+ *
+ * O `dono` é o que impede o jogador de levar o próprio tiro.
+ */
+const alvoJogador = {
+  posicao: new THREE.Vector3(),
+  raio: 0.85,
+  vitais: vitaisJogador,
+  dono: jogadorComoDono,
+};
+
+/** Lista única de alvos do quadro. Reaproveitada: roda a 60 Hz em combate. */
+const _alvos = [];
+function montarAlvos() {
+  _alvos.length = 0;
+  for (const a of activePlanet.fauna.alvos()) _alvos.push(a);
+  for (const a of sentinelas.alvos()) _alvos.push(a);
+
+  // A pé o alvo é o traje; pilotando, o casco — e o raio muda junto, porque
+  // acertar uma nave é bem mais fácil que acertar uma pessoa.
+  const aPe = mode === 'FOOT';
+  alvoJogador.posicao.copy(aPe ? playerController.position : ship.group.position);
+  alvoJogador.vitais = aPe ? vitaisJogador : vitaisNave;
+  alvoJogador.raio = aPe ? 0.85 : 2.4;
+  _alvos.push(alvoJogador);
+
+  return _alvos;
+}
+
+/**
+ * O que acontece quando um tiro encosta em alguma coisa.
+ *
+ * Mora aqui, e não dentro de `Weapons.js`, porque a reação depende de coisas que
+ * o transporte não conhece nem deveria: o planeta ativo, a rede, o áudio e a
+ * interface. O módulo de projéteis só avisa que houve impacto e onde.
+ */
+projeteis.aoImpactar = (impacto) => {
+  if (impacto.explodiu) {
+    const e = impacto.explosao;
+    audio.terraform(false);
+
+    // --- Cratera ---------------------------------------------------------
+    // Direto no campo de edições, sem passar pelo `Terraform`: aquele é um
+    // escultor COM ESTADO, feito para o botão segurado, que agrupa quadros
+    // consecutivos na mesma edição. Uma granada é um evento único, e reutilizar
+    // o escultor faria duas granadas próximas se fundirem num buraco só.
+    _reference.copy(impacto.ponto);
+    const amostra = activePlanet.sampleAt(_reference);
+    // Só abre cratera se explodiu perto do chão: uma granada que erra e some no
+    // ar não pode cavar o terreno a cem unidades abaixo dela.
+    if (amostra.altitude < 4) {
+      const edicao = {
+        id: `gr${(Math.random() * 1e9) | 0}`,
+        x: amostra.direction.x,
+        y: amostra.direction.y,
+        z: amostra.direction.z,
+        r: e.raioCratera,
+        f: e.cratera,
+        t: EDICAO.SOMAR,
+      };
+      if (activePlanet.aplicarEdicao(edicao)) {
+        multiplayer?.terraformou(starSystem.planets.indexOf(activePlanet), edicao);
+      }
+    }
+
+    // --- Dano em área ----------------------------------------------------
+    // Cai com a distância em vez de ser chapado no raio: dano uniforme faz a
+    // borda da explosão virar uma parede invisível, onde meio passo separa
+    // levar tudo de não levar nada.
+    for (const alvo of activePlanet.fauna.alvos()) {
+      const d = alvo.posicao.distanceTo(impacto.ponto);
+      if (d > e.raio) continue;
+      alvo.vitais.aplicarDano(e.dano * (1 - d / e.raio), impacto.dono);
+    }
+    return;
+  }
+
+  if (!impacto.alvo) return;
+
+  // O jogador levando tiro: o clarão é o único aviso, porque um projétil de
+  // drone vindo de trás não aparece na tela de jeito nenhum.
+  if (impacto.alvo === alvoJogador) {
+    hud.pulsarDano();
+    if (impacto.morreu) hud.notify('VOCÊ FOI ABATIDO', 3);
+    return;
+  }
+
+  audio.collect();
+  if (!impacto.morreu) return;
+
+  if (impacto.alvo.drone) {
+    // Espólio: peças de tecnologia. Abater sentinela tem de PAGAR, senão o
+    // jogador só evita o conflito e o sistema inteiro vira um imposto.
+    const ganho = inventory.add('ferrite', 2 + ((Math.random() * 3) | 0));
+    hud.notify(ganho ? 'SENTINELA DESTRUÍDA · +SUCATA' : 'SENTINELA DESTRUÍDA', 1.6);
+  } else {
+    hud.notify('CRIATURA ABATIDA', 1.4);
+    // Abater fauna é a infração mais pesada da lista. Ver `Sentinelas`.
+    sentinelas.registrarInfracao(0.5);
+  }
+};
+
+/**
+ * Inscreve o retorno de ataque da fauna do planeta ativo.
+ *
+ * Precisa ser reinscrito, e não feito uma vez no boot: cada planeta tem sua
+ * própria instância de `Fauna`, e o jogador troca de corpo sem que nada aqui
+ * seja reconstruído. Sem isto, pousar na segunda lua daria criaturas que
+ * perseguem e mordem sem nunca tirar um ponto de vida.
+ *
+ * A guarda de identidade evita reatribuir a mesma função a cada quadro.
+ */
+let faunaInscrita = null;
+function ligarAtaquesDaFauna(planeta) {
+  if (faunaInscrita === planeta.fauna) return;
+  faunaInscrita = planeta.fauna;
+
+  planeta.fauna.aoAtacar = (dano) => {
+    // Dentro da nave o jogador não é mordido: o casco é que apanha. Sem esta
+    // distinção, pousar no meio de uma matilha drenaria o traje através de duas
+    // toneladas de blindagem.
+    const alvo = mode === 'FOOT' ? vitaisJogador : vitaisNave;
+    const golpe = alvo.aplicarDano(dano, 'fauna');
+    if (golpe.vida > 0 || golpe.escudo > 0) {
+      audio.terraform(true);
+      hud.pulsarDano?.();
+    }
+    if (golpe.letal) hud.notify('VOCÊ FOI ABATIDO', 3);
+  };
+}
 const inventory = new Inventory();
 const discovery = new Discovery();
 const scanner = new Scanner(engine.scene);
@@ -304,7 +574,16 @@ function inscreverNaOrigemFlutuante() {
     .limpar()
     .add(...starSystem.planets.map((planet) => planet.group))
     .add(ship.group, scanner.pulse, scanner.beam, terraform.marcador)
-    .addVector(playerController.position);
+    .addVector(playerController.position)
+    // Os tiros guardam posição de cena por conta própria (a malha instanciada
+    // fica na origem), então precisam de tratamento e não de deslocamento do
+    // objeto. Sem isto, cada recentragem lançaria todo tiro vivo a milhares de
+    // unidades — e como o rebase acontece justamente ao voar rápido, o sintoma
+    // apareceria só no combate de naves.
+    .onShift((delta) => {
+      projeteis.deslocar(delta);
+      sentinelas.deslocar(delta);
+    });
 }
 
 inscreverNaOrigemFlutuante();
@@ -543,6 +822,11 @@ async function iniciar() {
   multiplayer?.identificar(nome);
 
   started = true;
+  // Reaplica agora que o mundo desenhou pelo menos uma vez: os uniformes de
+  // detalhe do terreno só existem depois de `onBeforeCompile` rodar, e no boot
+  // ainda não existiam. Sem isto, quem escolheu o perfil de desempenho voltaria
+  // ao jogo com o detalhe caro ligado.
+  aplicarQualidade();
   // Já restauramos a posição salva; deixar o cenário de URL rodar depois a
   // sobrescreveria alguns frames adiante, e o jogador veria um salto.
   if (voltouAoPonto) spawnApplied = true;
@@ -571,15 +855,52 @@ viewModel.redimensionar(window.innerWidth / window.innerHeight);
 galaxyMap.redimensionar(window.innerWidth / window.innerHeight);
 
 canvas.addEventListener('click', () => {
-  if (started && !painelAberto) requestPointerLock();
+  requestPointerLock();
   // Voltar de outra aba deixa o contexto suspenso; retomar é idempotente.
   audio.start();
 });
 
+/**
+ * O cursor precisa estar VISÍVEL e livre agora?
+ *
+ * ===========================================================================
+ * FONTE ÚNICA DE VERDADE, DEPOIS DE UM BUG QUE APARECEU DUAS VEZES
+ * ===========================================================================
+ * Antes, cada modo cuidava do ponteiro por conta própria — o mapa chamava
+ * `exitPointerLock` ao abrir, o painel também, o menu de pausa idem. E o
+ * ouvinte de clique do canvas, que não sabia de nenhum deles, RETRAVAVA o
+ * ponteiro no clique seguinte.
+ *
+ * O efeito era o relatado: abrir o menu de pausa, clicar em qualquer coisa e o
+ * cursor sumir, deixando o menu impossível de usar. No mapa galáctico era pior,
+ * porque lá o alvo do clique é o próprio canvas — selecionar uma estrela
+ * travava o ponteiro e o mapa deixava de responder ao mouse.
+ *
+ * A correção não é acrescentar mais uma chamada de `exitPointerLock`: é ter UM
+ * lugar que responde "o cursor está livre?", e fazer com que tanto o pedido de
+ * travamento quanto os manipuladores de botão o consultem. Qualquer modo novo
+ * que precise do cursor entra nesta lista e funciona de imediato.
+ */
+function cursorLivre() {
+  return !started || menuPausa.aberto || galaxyMap.aberto || painelAberto || !!hud.chat?.aberto;
+}
+
 function requestPointerLock() {
+  if (cursorLivre()) return;
   // Pode rejeitar por motivos fora do nosso controle (documento aninhado,
   // política do navegador). O jogo continua jogável no teclado.
   canvas.requestPointerLock?.()?.catch?.(() => {});
+}
+
+/**
+ * Solta o ponteiro e garante que ele não volte no próximo clique.
+ *
+ * Chamado por quem abre um modo de cursor livre. O `exitPointerLock` sozinho
+ * não basta — é `cursorLivre()` que impede o retravamento —, mas sem ele o
+ * cursor só reapareceria no próximo movimento do mouse.
+ */
+function soltarPonteiro() {
+  document.exitPointerLock?.();
 }
 
 /* ========================================================================== */
@@ -633,6 +954,7 @@ function applySpawnScenario() {
   multiplayer?.identificar(pilotInput.value.trim() || 'Piloto');
 
   started = true;
+  aplicarQualidade(); // ver a nota no outro ponto de início
   overlay.classList.add('fade-out');
   hud.show();
 }
@@ -747,6 +1069,23 @@ window.addEventListener('keydown', (event) => {
   // `N` de navegação, e não `M`: `M` já é o mudo, e duas ações na mesma tecla é
   // exatamente o que este arquivo passou a não fazer.
   // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // ESCAPE ABRE A PAUSA, e vem antes de tudo.
+  //
+  // Precisa ser a PRIMEIRA coisa testada porque é a tecla de saída universal: se
+  // qualquer bloco acima puder consumi-la, existe um estado em que o jogador
+  // aperta Escape e nada acontece — e é justamente no estado travado que ele
+  // mais precisa dela. Os modos que dão outro sentido ao Escape (mapa, chat,
+  // painel) tratam disso fechando a si mesmos primeiro.
+  // -------------------------------------------------------------------------
+  if (event.code === 'Escape') {
+    if (hud.chat?.aberto) return; // o próprio campo já limpa e fecha
+    if (galaxyMap.aberto) { fecharMapa(); return; }
+    if (painelAberto) { alternarPainel(false); return; }
+    menuPausa.alternar();
+    return;
+  }
+
   if (event.code === 'KeyN') {
     alternarMapa();
     return;
@@ -904,7 +1243,9 @@ canvas.addEventListener('mousedown', (event) => {
     return;
   }
 
-  if (!started || mode !== 'FOOT' || painelAberto) return;
+  // `cursorLivre()` cobre pausa, painel, chat e "ainda não começou" de uma vez.
+  // Sem isto, clicar no fundo escurecido do menu de pausa disparava o blaster.
+  if (cursorLivre() || mode !== 'FOOT') return;
 
   if (event.button === 0) botao.esquerdo = true;
   if (event.button === 2) botao.direito = true;
@@ -1047,7 +1388,7 @@ function alternarMapa() {
   // também a entrada só atrasaria a primeira leitura da tela.
   galaxyMap.assentar();
   hud.mostrarMapa(true);
-  document.exitPointerLock?.();
+  soltarPonteiro();
 
   // ---------------------------------------------------------------------
   // O MUNDO PARA ENQUANTO O MAPA ESTÁ ABERTO.
@@ -1074,7 +1415,7 @@ function fecharMapa() {
   galaxyMap.eixos.frente = galaxyMap.eixos.lado = galaxyMap.eixos.cima = 0;
   hud.mostrarMapa(false);
   audio.ui(false);
-  if (started && !painelAberto) requestPointerLock();
+  requestPointerLock();
 }
 
 /* ========================================================================== */
@@ -1229,6 +1570,15 @@ function saltarPara(sistema) {
      */
     aoTrocar: () => {
       starSystem.recriar(sistema.seed);
+      // A direcional do sistema novo é outro objeto: sem reinscrever, as
+      // sombras continuariam presas à luz da estrela que acabou de ser
+      // descartada — e simplesmente sumiriam da cena.
+      sombras.adotar(starSystem.sunLight);
+      // O alerta é de um SISTEMA, não do jogador: fugir num salto é uma saída
+      // legítima e cara (custa combustível de dobra), e mantê-lo pelo universo
+      // afora deixaria o jogador perseguido para sempre pelo que fez uma vez.
+      sentinelas.limpar();
+      projeteis.limpar();
       inscreverNaOrigemFlutuante();
       posicionarNaChegada();
 
@@ -1273,7 +1623,7 @@ function alternarPainel(aberto) {
   if (painelAberto) {
     // Solta o cursor: o painel é clicável, e com o ponteiro travado no canvas
     // não haveria como escolher uma peça.
-    document.exitPointerLock?.();
+    soltarPonteiro();
   } else if (started) {
     requestPointerLock();
   }
@@ -1345,6 +1695,23 @@ function updateTools(dt) {
 
   build.mirar(_eye, _lookDir, activePlanet); // `ativo` falso: esconde o fantasma
 
+  // --- Blaster ------------------------------------------------------------
+  if (equipado.id === 'blaster') {
+    scanner.updateBeam(null, null);
+    scanner.target = null;
+    terraform.mirar(_eye, _lookDir, activePlanet, false);
+
+    if (botao.esquerdo && blaster.primario(_eye, _lookDir, jogadorComoDono)) {
+      viewModel.coice(0.5);
+      audio.terraform(true);
+    }
+    if (botao.direito && blaster.secundario(_eye, _lookDir, jogadorComoDono)) {
+      viewModel.coice(1.0);
+      audio.terraform(false);
+    }
+    return;
+  }
+
   // --- Terraformador ------------------------------------------------------
   if (equipado.id === 'terraformador') {
     scanner.updateBeam(null, null);
@@ -1392,6 +1759,10 @@ function updateTools(dt) {
       multiplayer?.colheu(planetaId, alvo.key, alvo.index);
     }
     if (colheita) {
+      // Extrair chama a atenção, mas pouco: o peso é dez vezes menor que o de
+      // abater uma criatura, então minerar um depósito inteiro custa menos de
+      // meio nível. Punir a atividade central do jogo seria o erro óbvio aqui.
+      if (!colheita.cheio) sentinelas.registrarInfracao(0.05);
       if (colheita.cheio) hud.notify('CARGA CHEIA', 1.8);
       else {
         audio.collect();
@@ -1596,6 +1967,7 @@ function restaurarPosicao(estado) {
   // destruiria os planetas debaixo dele e o deixaria caindo no vazio.
   if (typeof estado.sistema === 'number' && estado.sistema !== starSystem.seed) {
     starSystem.recriar(estado.sistema);
+    sombras.adotar(starSystem.sunLight);
     inscreverNaOrigemFlutuante();
     build.esquecerTudo();
   }
@@ -1656,6 +2028,16 @@ let biomeTimer = 0;
 const BIOME_INTERVAL = 0.25;
 
 engine.start((dt, elapsed) => {
+  // 0.0 Pausa: nada avança, mas o quadro continua sendo desenhado -----------
+  //
+  // Desenhar é justamente o ponto: o menu tem opções gráficas, e o jogador
+  // precisa VER o efeito de cada uma sobre a cena real atrás do vidro fosco.
+  // Um menu sobre tela preta obrigaria a fechar, olhar, reabrir e adivinhar.
+  //
+  // O `return` cobre física, LOD, fauna, sentinelas e rede — que é o que
+  // "pausado" tem de significar.
+  if (menuPausa.aberto) return;
+
   // 0. Mapa galáctico: o mundo fica congelado ------------------------------
   //
   // O mapa não é uma sobreposição, é um MODO. A cena do mundo nem chega a ser
@@ -1700,6 +2082,30 @@ engine.start((dt, elapsed) => {
   // 4. Ambiente (névoa, luz, exposição) em função da nova altitude ---------
   const landed = mode === 'FOOT' ? playerController.grounded : shipController.landed;
   gameState.update(activePlanet, _reference, landed);
+
+  // Os DOIS avançam todo quadro, inclusive o que não está em uso: o escudo da
+  // nave deixada no chão precisa se recuperar enquanto o piloto explora a pé,
+  // senão voltar para ela depois de um combate significaria decolar sem escudo
+  // nenhum, sem nada na tela explicando por quê.
+  if (started) {
+    vitaisJogador.atualizar(dt);
+    vitaisNave.atualizar(dt);
+    blaster.atualizar(dt);
+    // As sentinelas ANTES dos projéteis: elas se movem e atiram, e o tiro
+    // disparado neste quadro deve andar no mesmo quadro. Invertido, todo tiro
+    // de drone ficaria um quadro parado na boca.
+    sentinelas.atualizar(
+      dt,
+      activePlanet,
+      mode === 'FOOT' ? playerController.position : ship.group.position,
+      jogadorComoDono,
+      gameState.altitude < 400
+    );
+    // Os tiros avançam DEPOIS da física e ANTES da câmera: assim o impacto é
+    // resolvido contra as posições deste quadro, e não contra as do anterior.
+    projeteis.atualizar(dt, activePlanet, montarAlvos());
+  }
+
   if (started) checkPlanetDiscovery(activePlanet, gameState.altitude);
 
   // 5. Câmera --------------------------------------------------------------
@@ -1733,6 +2139,14 @@ engine.start((dt, elapsed) => {
     );
   }
 
+  // 5.3 Sombras --------------------------------------------------------------
+  // Depois do rebase e da câmera, pelo mesmo motivo da perspectiva aérea: a
+  // caixa de sombra é posicionada em coordenadas de CENA e um frame de atraso a
+  // deixaria deslocada exatamente pelo tamanho do salto de recentragem — o que
+  // se veria como a sombra inteira escorregando no chão a cada rebase.
+  sombras.atualizar(engine.camera, starSystem.sunDirection, gameState.altitude, gameState.up);
+  ceuAmbiente.atualizar(activePlanet.config, gameState, starSystem.sunDirection, gameState.up, dt);
+
   // 6. LOD + fila de geração ----------------------------------------------
   // A qualidade das nuvens vem ANTES do LOD dos planetas porque é lá que ela
   // é lida. Só conta depois do boot: os primeiros frames incluem compilação
@@ -1751,7 +2165,12 @@ engine.start((dt, elapsed) => {
   // própria checagem de altitude quando o jogador se afastou.
   if (faunaPlanet && faunaPlanet !== activePlanet) faunaPlanet.fauna.despawnAll();
   faunaPlanet = activePlanet;
-  if (started) activePlanet.fauna.update(dt, _reference, gameState.altitude);
+  if (started) {
+    // O fator dia decide quais espécies podem nascer: as noturnas só saem com o
+    // sol abaixo do horizonte (ver `Fauna.update`).
+    activePlanet.fauna.update(dt, _reference, gameState.altitude, gameState.dayFactor);
+    ligarAtaquesDaFauna(activePlanet);
+  }
 
   // O clima vem depois da câmera e do rebase: as partículas vivem num grupo
   // ancorado na posição de CENA da câmera deste frame, e usá-la antes do
@@ -1903,7 +2322,14 @@ engine.start((dt, elapsed) => {
     onFoot: mode === 'FOOT',
     throttle: shipController.braking ? 0 : shipController.throttle,
     jetpack: playerController.fuelRatio,
-    shield: 1,
+    // Os vitais mostrados são os de QUEM está levando o tiro agora: a pé é o
+    // traje, pilotando é o casco. Mostrar sempre os do jogador deixaria o
+    // combate de naves sem nenhuma leitura na tela.
+    shield: mode === 'FOOT' ? vitaisJogador.razaoEscudo : vitaisNave.razaoEscudo,
+    health: mode === 'FOOT' ? vitaisJogador.razaoVida : vitaisNave.razaoVida,
+    escudoRegenerando: mode === 'FOOT' ? vitaisJogador.regenerando : vitaisNave.regenerando,
+    alerta: sentinelas.nivel,
+    sentinelas: sentinelas.ativas,
     atmosphere: gameState.atmosphere,
     miningProgress: scanner.miningProgress,
     units: inventory.units,
@@ -1972,6 +2398,8 @@ window.__nms = {
   engine, starSystem, ship, shipController, playerController,
   gameState, inventory, discovery, scanner, seed: SEED, cloudQuality, audio,
   floatingOrigin, multiplayer, build, terraform, viewModel, galaxyMap, warp, weather,
+  vitaisJogador, vitaisNave, sombras, ceuAmbiente, projeteis, blaster, jogadorComoDono, hud,
+  sentinelas, alvoJogador, montarAlvos, qualidade, menuPausa, medirGpu, aplicarQualidade,
   saltarPara, alternarMapa,
   get ferramenta() { return ferramentaAtual(); },
   equipar,

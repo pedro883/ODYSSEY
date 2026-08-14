@@ -58,7 +58,13 @@ simplesmente não aparece. Créditos em `public/models/CREDITS.md`.
 | **Descobertas** | Catálogo de planetas e espécies com nomes procedurais e recompensa em unidades |
 | **Inventário** | Slots com empilhamento, 4 recursos, recurso "assinatura" por planeta |
 | **HUD** | Telemetria, navegação, carga, marcadores projetados na tela, prompts contextuais |
-| **Multijogador** | Sala por WebSocket: posição, orientação, modo (nave/a pé), a nave de cada um e **o que já foi colhido** — inclusive para quem entra depois |
+| **Mapa galáctico** | 178 mil sistemas amostrados sob demanda de um hash do endereço; câmera amortecida, voo livre pela galáxia, seleção em espaço de tela e salto interestelar com troca de universo no auge do clarão |
+| **Multijogador por sistema** | Sala por WebSocket dividida em **canais**: cada sistema estelar tem o próprio mundo compartilhado (posição, colheita, construção, escavação), e saltar é trocar de canal — dois jogadores só se veem se estiverem no mesmo lugar da galáxia |
+| **Chat** | Dois alcances: **sistema** (o canal) e **global** (a sala inteira), com autor carimbado pelo servidor |
+| **Descoberta de sistemas** | Todo sistema tem nome único e dono: quem chega primeiro fica registrado no banco, e a ficha do mapa mostra por quem e quando |
+| **Oceano** | Casca no nível do mar com shader próprio: profundidade amostrada do relevo, quatro escalas de onda, espuma na arrebentação e nas cristas, e cor que se aprofunda com o fundo |
+| **Nadar** | Empuxo, arrasto e mergulho, com a transição andar → nadar contínua pela fração do corpo submersa, e névoa densa debaixo d'água |
+| **Clima** | Chuva, tempestade, neve, ventania de areia e neblina, **deduzidos** da umidade e da temperatura do lugar mais um campo lento no tempo — dois jogadores veem a mesma chuva sem trocar um byte |
 | **Construção de bases** | 27 peças modulares do Kenney Space Station Kit em 6 categorias, numa grade tangente à superfície, com custo em recursos, encaixe assistido, prévia com moldura, animação e som ao assentar, demolição com devolução integral, colisão contra paredes e piso, sincronia na sala e gravação em MySQL |
 | **Terreno deformável** | Cavar e elevar o solo com o terraformador, **permanente e compartilhado**: a deformação é uma camada somada ao ruído, sincronizada na sala e gravada no banco, com orçamento e descarte do mais antigo |
 | **Terreno sob a base** | O relevo se aplaina sozinho embaixo do que se constrói, e o platô é recalculado por cada cliente a partir das peças — nada disso trafega |
@@ -124,18 +130,29 @@ src/
 │   ├── QuadTreeNode.js        Nó de LOD: split/merge sem buracos, horizon culling
 │   ├── ChunkManager.js        Fila priorizada, index compartilhado, cache LRU
 │   ├── PropScatter.js         Vegetação/rochas/depósitos com InstancedMesh
+│   ├── Weather.js             Chuva/neve/areia deduzidas do lugar e da hora
 │   └── StarField.js           Campo de estrelas e estrela do sistema
+│
+├── galaxy/
+│   ├── GalaxyMap.js           178 mil sistemas sob demanda, navegação e seleção
+│   ├── Nebula.js              Fundo de nebulosa por ruído
+│   └── WarpJump.js            Túnel do salto e troca de universo no clarão
 │
 ├── shared/                    ── IMPORTADO PELA MAIN THREAD **E** PELO WORKER ──
 │   ├── noise.js               Simplex 3D seedável, fBm, ridged multifractal
 │   ├── terrain.js             Cube-sphere, campo de altura, biomas e cores
+│   ├── galaxy.js              Endereço, nome único e amostragem de sistemas
+│   ├── edits.js               Camada de escavações somada ao relevo
 │   └── props.js               Pesos de espalhamento por bioma, recursos
 │
 ├── workers/
 │   ├── terrain.worker.js      Geometria + espalhamento de props, multi-planeta
 │   └── WorkerPool.js          Pool compartilhado com balanceamento por carga
 │
-├── shaders/AtmosphereShader.js  Single scattering Rayleigh + Mie
+├── shaders/
+│   ├── AtmosphereShader.js    Single scattering Rayleigh + Mie
+│   ├── OceanShader.js         Oceano: profundidade do relevo, ondas, espuma
+│   └── SurfaceDetail.js       Grão e relevo do terreno, injetados por onBeforeCompile
 │
 ├── entities/
 │   ├── Ship.js                Modelo da nave (primitivas)
@@ -150,8 +167,17 @@ src/
 │   ├── Discovery.js           Catálogo e nomes procedurais
 │   └── Scanner.js             Pulso de varredura + feixe de mineração
 │
+├── net/Multiplayer.js         Sala: canal por sistema, avatares, chat
+│
+├── dev/
+│   ├── Harness.js             Bancada de inspeção (`?dev=1`)
+│   └── Capturas.js            Fotografa o jogo em disco (§3.17.1)
+│
 └── ui/HUD.js                  Overlay HTML/CSS + marcadores projetados
 ```
+
+O servidor de sala vive fora de `src/`, em `server/` (`mp-server.js` e `db.js`),
+porque roda no Node e não passa pelo Vite.
 
 ### A decisão estrutural: `shared/` é importado dos dois lados
 
@@ -593,6 +619,79 @@ do sol pelo caminho óptico (`grazing × atmosfera`): rasante ao horizonte a luz
 chega mais laranja e mais fraca, que é o mesmo fenômeno que a atmosfera já
 calculava para o céu.
 
+### 3.6.4 Oceano, e nadar dentro dele
+
+O mar era uma esfera com material padrão translúcido. Da órbita passava; ao
+nível dos olhos era uma chapa de plástico azul, sem movimento e com a mesma cor
+sobre um banco de areia e sobre uma fossa. Água que não muda de cor com a
+profundidade não lê como água — lê como um plano pintado atravessando a
+paisagem.
+
+O shader de hoje (`src/shaders/OceanShader.js`) tem quatro peças:
+
+- **Profundidade por vértice, amostrada do próprio relevo no nascimento do
+  planeta.** O caminho usual seria ler o depth buffer da cena; aqui isso seria
+  caro e frágil (o terreno vai para um alvo separado quando a perspectiva aérea
+  está ligada). Em compensação este projeto tem uma vantagem que jogo com
+  terreno autorado não tem: **a profundidade é uma função**, conhecida na CPU
+  antes do primeiro quadro. Uma passada de 72 mil amostras dá gradiente de
+  praia, espuma e cor por profundidade sem nenhum passe extra.
+- **Ondas na NORMAL, não na posição.** Deslocar vértices numa esfera planetária
+  daria cristas de dezenas de unidades, visíveis da órbita como uma bola
+  amassada. O que se vê do convés é o brilho quebrando, e isso é normal.
+- **Espuma em duas fontes**: a arrebentação (onde o fundo sobe) e as cristas em
+  mar aberto — sem a segunda, o mar longe da costa fica liso demais e denuncia
+  que a "onda" é só iluminação.
+- **Fresnel comedido.** De cima a água deixa ver o fundo; de raspão vira espelho
+  do céu.
+
+**Nadar** entrou junto: empuxo um pouco acima do peso (com empuxo exato o corpo
+fica em equilíbrio neutro e PARA onde estiver, o que na prática é voar dentro da
+água), arrasto horizontal e vertical, `Espaço` para subir e `Ctrl`/`C` para
+mergulhar. A transição andar → nadar é contínua pela fração do corpo submersa:
+tratá-la como interruptor produz o personagem alternando entre correr e boiar a
+cada onda. Debaixo d'água a névoa fica azul e densa, e a casca do oceano passa a
+ser desenhada dos dois lados — com face única, mergulhar fazia a água sumir e o
+nadador via o céu por dentro do mar.
+
+Dois erros meus que valem registro, porque explicam por que isto demorou:
+
+- **O shader não compilava.** Dois uniforms declarados no JavaScript e
+  esquecidos no GLSL derrubavam o programa inteiro em silêncio — e o que se via
+  como "água feia" era o **fundo do mar sem oceano nenhum por cima**. Todo
+  ajuste de cor feito antes disso era invisível por construção.
+- **A esfera era grossa demais para o planeta novo.** Com 160×112 num raio de
+  4 600, cada quadrilátero tem ~180 unidades e a profundidade por vértice não
+  sabe onde a praia começa: quadrantes inteiros de mar raso eram classificados
+  como terra e recortados, e o oceano aparecia em xadrez. A resolução subiu, e o
+  recorte por vértice saiu de cena — **quem esconde a água sob o continente é o
+  z-buffer**, que já tem o terreno opaco desenhado antes e resolve isso com
+  precisão de pixel.
+
+### 3.6.5 Clima
+
+Chuva, tempestade, neve, ventania de areia e neblina, em `src/world/Weather.js`.
+
+**O tempo é deduzido, não sorteado.** Não há estado de clima guardado nem
+simulação de frentes frias: umidade e temperatura do terreno dizem o que PODE
+cair ali (chuva num bosque, neve num planalto gelado, areia num deserto) e um
+campo lento no tempo diz se está caindo agora. É a mesma escolha que rege o
+resto do projeto — o mundo é uma função, não um banco de dados — e dá de graça
+duas coisas difíceis de outro jeito: dois jogadores na mesma sala veem a mesma
+chuva **sem trocar um byte**, e sair voando e voltar meia hora depois encontra o
+tempo que a hora pede, não o que ficou salvo numa variável.
+
+As partículas vivem num grupo ancorado na câmera, em coordenadas locais a ele.
+Isso resolve sem código extra o problema que mais atrapalharia aqui: a origem
+flutuante (§3.0.1) desloca a cena inteira quando o jogador anda, e partículas em
+coordenadas de mundo saltariam a cada recentragem. O mesmo sistema vira gota
+esticada, floco redondo ou grão horizontal por um uniform de alongamento, e a
+queda é **radial ao planeta** — a cem quilômetros dali a vertical é outra.
+
+Metade do efeito não são as gotas: é a **névoa**. Ar carregado encurta o alcance
+da vista, e a paisagem sumindo atrás da chuva convence muito mais do que a
+cortina em si.
+
 ### 3.7 A transição seamless
 
 `GameState.js` não move nada: lê a altitude e interpola todo o ambiente.
@@ -715,10 +814,9 @@ diferença no uso:
 - **A crítica só aparece depois de tentar**, e some assim que a pessoa começa a
   corrigir. Marcar erro enquanto ela digita o terceiro caractere é hostil.
 
-O nome fica no `localStorage` e vai para a sala de multijogador. É
-deliberadamente um NOME, não uma conta: não há senha nem servidor de identidade,
-e nada impede duas pessoas de usarem o mesmo. Quando entrar o MySQL (§5), este
-campo vira o login e o `localStorage` passa a guardar sessão, não identidade.
+O nome fica no `localStorage`, vai para a sala de multijogador e assina o chat e
+as descobertas. A senha ao lado é **opcional** e é o que separa nome de conta
+(§3.12): sem ela o jogo roda igual e só não salva.
 
 ### 3.11 Multijogador
 
@@ -743,12 +841,70 @@ dois clientes calculam iguais. Sobram duas coisas:
 Por isso o servidor guarda só uma tabela de jogadores e um conjunto de props
 colhidos. Nenhum vértice de terreno passa pela rede.
 
-Quatro decisões que sustentam o resto:
+#### Canais: um sistema, um mundo
 
-- **O seed é do servidor.** Dois clientes com seeds diferentes estariam em
-  universos diferentes, e sincronizar posição colocaria o outro jogador dentro
-  de uma montanha que para você não existe. Ao receber um seed diferente, o
-  cliente recarrega apontando para o do servidor.
+A sala **não é um universo só**. Cada sistema estelar é um canal com o próprio
+estado compartilhado — colhidos, bases, escavações e presentes —, e posição,
+colheita, construção e terraformação circulam apenas entre quem está no mesmo
+seed. **Saltar é trocar de canal.**
+
+Isto substituiu o desenho anterior, em que o servidor fixava um seed e obrigava
+todo mundo a ele: quem entrava com outro tinha a página recarregada até
+coincidir. Era simples e fazia do hiperimpulsor uma mentira — dois jogadores
+saltavam para sistemas diferentes e continuavam se vendo, cada um voando dentro
+do planeta que o outro não tinha.
+
+Três coisas que caem no lugar com essa mudança:
+
+- **O banco já estava pronto.** `colhido`, `construcao` e `terreno` sempre
+  tiveram `seed` na chave primária — o esquema modelava sistemas separados desde
+  o início, e era só o servidor que lia um deles e ignorava o resto. Não houve
+  migração; o que mudou foi QUANDO cada conjunto é lido: um canal é carregado na
+  primeira vez que alguém entra nele, e não no boot. Um servidor com cem
+  sistemas visitados não tem por que ler os cem para servir quem está em um.
+- **Difundir exige nomear o alcance.** A função antiga que mandava para a sala
+  inteira deixou de existir; sobraram `transmitirNoCanal` e
+  `transmitirParaTodos`, e o nome comprido da segunda é de propósito — usar o
+  alcance errado passa a ser uma escolha visível no código. Só duas coisas
+  atravessam canais: o catálogo de descobertas (é da galáxia) e o chat global.
+- **O realinhamento de seed sobreviveu, mas só para quem não escolheu.** Abrir o
+  jogo sem `?seed=` continua colocando você junto de quem já está na sala — é o
+  que faz "entrar com um amigo" funcionar sem combinar número nenhum. Chegar com
+  `?seed=` agora é respeitado: seeds diferentes deixaram de ser um conflito a
+  resolver e passaram a ser dois lugares diferentes da galáxia.
+
+A troca de canal é avisada **no auge do clarão do salto**, depois de o cliente
+reconstruir o universo local e antes de o primeiro pacote de posição sair: um
+`state` com o universo novo e o canal antigo poria o avatar dentro do planeta de
+quem ficou para trás. Os avatares remotos são apagados no envio, não na
+resposta — entre uma coisa e outra passam alguns quadros.
+
+Verificado com três clientes: dois no mesmo sistema se veem e não recebem nada
+do terceiro; chat local fica no canal e o global alcança os três; colheita e
+construção não atravessam; ao saltar, quem chega recebe o mundo do destino
+(bases, colheitas, escavações e presentes) e quem fica vê a saída.
+
+#### Chat
+
+Dois alcances — **sistema** e **global** —, e a diferença é a razão de o chat
+existir num jogo de galáxia: o local é conversa com quem está no mesmo lugar, e
+o global é o único caminho por onde duas pessoas separadas por mil anos-luz
+combinam de se encontrar.
+
+`Enter` abre a linha, `Tab` troca o alcance, `Esc` cancela. Três detalhes que
+não são cosméticos:
+
+- **O `keydown` da caixa para a propagação.** Sem isso, digitar "wasd" faz o
+  personagem andar e "1" troca de ferramenta.
+- **O eco é do servidor, não local.** Ele carimba autor e hora, e é o mesmo
+  pacote que chega para os outros; imprimir localmente antes faria a própria
+  mensagem aparecer duas vezes — ou, pior, aparecer mesmo quando o servidor a
+  recusou.
+- **O nome vem do servidor, nunca do pacote.** Deixá-lo vir do cliente seria
+  deixar qualquer um assinar como qualquer um.
+
+Uma mensagem a cada 700 ms por conexão, 200 caracteres, histórico de 12 linhas
+que esmaece depois de 14 segundos.
 - **Posições viajam em espaço LOCAL DO PLANETA**, nunca em espaço de mundo. Com
   origem flutuante (§3.0.1) o mundo se desloca sob os pés de cada jogador em
   momentos diferentes: a mesma coordenada de cena significa lugares diferentes
@@ -795,7 +951,8 @@ Cinco defeitos que só apareceram abrindo dois navegadores de verdade:
 - **O seed só era alinhado no `join`.** Como cada aba sorteia um seed, a pessoa
   escolhia o nome, clicava em INICIAR VOO e a página recarregava de volta para o
   menu. O servidor passou a mandar `hello` com o seed assim que a conexão abre,
-  e o realinhamento acontece durante a geração do terreno.
+  e o realinhamento acontece durante a geração do terreno. (Hoje esse
+  realinhamento só vale para quem não escolheu sistema — ver *Canais*.)
 - **O painel escondia a diferença entre "sala vazia" e "sem sala".** Agora ele é
   sempre visível, e o contador mostra `OFFLINE` ou `…` quando não há conexão —
   com a linha `npm run mp` dizendo como resolver.
@@ -827,20 +984,34 @@ mysql -u root < server/schema.sql    # cria banco, tabelas e o usuário da aplic
 npm run mp                            # a sala conecta sozinha
 ```
 
-**Quatro tabelas bastam** — e o motivo é a premissa do projeto. O universo
-inteiro é função do seed: terreno, biomas, posição de cada arbusto e espécie de
-cada bicho se recalculam iguais em qualquer máquina. Nada disso vai para o
-banco. Sobra só o que o jogador MUDA:
+**Seis tabelas bastam** — e o motivo é a premissa do projeto. O universo inteiro
+é função do seed: terreno, biomas, posição de cada arbusto e espécie de cada
+bicho se recalculam iguais em qualquer máquina. Nada disso vai para o banco.
+Sobra só o que o jogador MUDA:
 
-| tabela | o quê |
-|---|---|
-| `conta` | login e hash da senha |
-| `progresso` | unidades, inventário e descobertas, por conta **e por seed** |
-| `colhido` | props extraídos — a única mutação permanente do mundo |
+| tabela | o quê | escopo |
+|---|---|---|
+| `conta` | login e hash da senha | — |
+| `progresso` | unidades, inventário e descobertas | conta **×** sistema |
+| `colhido` | props extraídos — mutação permanente do mundo | sistema |
+| `construcao` | uma peça de base por linha, com o slot na chave | sistema |
+| `terreno` | escavações, com orçamento e descarte do mais antigo | sistema |
+| `descoberta` | quem chegou primeiro em cada sistema | **galáxia** |
 
-A chave de `progresso` inclui o seed porque o mesmo jogador em outro sistema
-estelar é outro progresso: sem isso, trocar de seed traria um inventário
-coletado num mundo que não existe mais.
+A coluna `seed` nas três tabelas de mundo é o que permitiu, depois, dividir a
+sala em canais por sistema (§3.11) sem migração nenhuma: o esquema já modelava
+sistemas separados, e era só o servidor que lia um deles e ignorava o resto.
+
+`progresso` é por conta **e** por sistema porque o mesmo jogador em outro sistema
+estelar é outro progresso — sem isso, saltar traria um inventário coletado num
+mundo que não existe mais. Ao entrar, o servidor devolve a linha **mais
+recente** da conta, de qualquer sistema: o estado guardado carrega o campo
+`sistema`, então o cliente sabe para onde voltar, e pedir a linha do sistema de
+entrada devolveria o estado de um lugar onde a pessoa talvez não esteja há
+semanas.
+
+`descoberta` é a exceção: o endereço identifica um lugar da galáxia, que é o
+mesmo em qualquer partida, então ela não tem `seed` (§3.12.1).
 
 Decisões que merecem nota:
 
@@ -873,6 +1044,45 @@ inventário, o catálogo e os arbustos ainda colhidos. Senha errada responde
 > índice corrompido, e por isso nenhum `GRANT` gravava. `REPAIR TABLE mysql.db`
 > resolveu. Se os privilégios do usuário `odyssey` não colarem, é o primeiro
 > lugar a olhar.
+
+### 3.12.1 Descoberta de sistemas
+
+Todo sistema tem **nome único** e **dono**: quem chega primeiro fica registrado,
+e a ficha do mapa mostra por quem.
+
+O nome precisou ser refeito para isso valer. As três tabelas de sílabas geram
+22 × 10 × 12 = 2 640 combinações para cerca de 178 mil sistemas — não é risco de
+colisão, é a garantia de que dezenas dividem o mesmo nome. Enquanto ninguém
+comparava dois deles isso passava despercebido; a partir do momento em que um
+sistema tem dono, dois "Kelaenova" diferentes tornam a informação inútil.
+
+A saída foi acrescentar uma **designação**: o endereço do sistema (galáxia,
+voxel e índice) empacotado em 31 bits e escrito em base 36 — `Toriavex 0MB-EIO`.
+Não é um hash: é uma **bijeção**. Endereços distintos têm designações distintas,
+então a unicidade é aritmética e continua valendo sem registro central nenhum.
+
+A tabela `descoberta` é a única que **não** é por universo: o endereço identifica
+um lugar da galáxia, que é a mesma em qualquer partida, então a descoberta
+acompanha o lugar e não o seed da sala. A chave primária no endereço implementa
+a regra inteira — `INSERT IGNORE` faz o próprio banco recusar o segundo a
+chegar, sem trava nem comparação de horário no servidor.
+
+Duas decisões do lado do cliente:
+
+- **Quem decide é o servidor.** O cliente reivindica todo sistema em que entra,
+  inclusive um que já visitou e um que outra pessoa descobriu ontem; ele não
+  teria como decidir sozinho de qualquer forma, porque só conhece o catálogo do
+  momento em que entrou. A marca no mapa só aparece quando a confirmação volta.
+- **A tentativa vive no laço, não na chegada.** A tentação é reivindicar logo
+  depois de situar o mapa, e não funciona: no boot o jogo entra no sistema ANTES
+  de a sala responder, e a reivindicação sairia sem o catálogo em mãos — o
+  cliente marcaria como inédito um sistema descoberto no mês passado. Esperar a
+  conexão numa chamada única traria o problema oposto: quem joga sem servidor
+  nunca registraria nada. Uma tentativa por quadro, guardada por um endereço já
+  resolvido, cobre os dois casos sem nenhuma coordenação.
+
+No campo de estrelas há dois degraus de brilho, porque são duas perguntas
+diferentes: forte onde **você** esteve, médio onde **alguém** registrou.
 
 ### 3.13 Construção de bases
 
@@ -1160,8 +1370,253 @@ para editar direto no gerenciador de arquivos, sem recompilar:
 > agora detecta essa combinação e explica no console, porque o sintoma sozinho
 > (sala eternamente OFFLINE) não aponta para a causa.
 
-**A sala não persiste.** Quem colheu o quê vive na memória do processo: um
-restart zera. É o primeiro item que o MySQL (§5) resolve.
+### 3.16.1 Pós-processamento
+
+`src/shaders/PostProcess.js` fecha o pipeline: bloom, exposição, tone mapping,
+saturação, contraste, vinheta e grão.
+
+Ele só existe porque o passe de perspectiva aérea (§3.6.3) já tinha feito o
+trabalho difícil — renderizar a cena num alvo **linear** com o tone mapping
+desligado. Bloom precisa exatamente disso: somar um halo a um pixel já
+comprimido para [0,1] não tem para onde crescer, e o brilho vira uma mancha
+acinzentada. O tone mapping **saiu** da perspectiva aérea e passou a ser a
+última coisa que acontece:
+
+```
+cena -> alvo HDR linear
+     -> perspectiva aérea (soma espalhamento, sem comprimir)
+     -> extração de brilho + borrão em cascata (4 níveis, meia resolução)
+     -> composição: soma o bloom, expõe, comprime, tinge, vinheta, grão
+     -> tela
+```
+
+Decisões que valem nota:
+
+- **Cascata, não um borrão só.** Um Gaussiano largo o bastante para o halo de um
+  sol custa dezenas de amostras por pixel; borrar em resoluções decrescentes e
+  somar de volta dá o mesmo alcance com um punhado, porque cada nível cobre o
+  dobro da distância — o pixel dele é o dobro do tamanho. O borrão separável usa
+  cinco leituras para cobrir nove texels, deixando a interpolação bilinear da
+  GPU fazer metade do trabalho.
+- **Joelho na extração de brilho.** Um corte duro no limiar faz um pixel que
+  oscila em torno dele entrar e sair do bloom a cada quadro, e a imagem pisca em
+  movimento.
+- **Contraste com pivô em 0.42 e levante de sombra.** Com pivô no meio, uma
+  floresta densa perdia a folhagem escura inteira para o preto: mais dramático
+  numa captura parada, ilegível em movimento.
+- **Grão mascarado por luminância.** Ele existe para quebrar o *banding* de
+  degradês grandes (céu, névoa, água profunda) que 8 bits por canal não
+  resolvem. Sem a máscara, o preto do espaço no mapa galáctico ficava
+  chuviscando — ruído onde não há sinal nenhum para proteger.
+- **O mapa galáctico passa pelo mesmo caminho**, e é onde o efeito mais aparece:
+  24 mil estrelas em blending aditivo são a fonte pontual que o bloom existe
+  para espalhar.
+
+Custo medido: **1,4 ms por quadro** a 1280×720 (5,7 ms contra 4,3 ms).
+`?post=off` desliga tudo e volta ao caminho anterior, com o tone mapping de novo
+dentro do passe atmosférico — é assim que se compara lado a lado.
+
+### 3.16.2 Sombras do sol
+
+A luz do sol é direcional, e o mapa de sombra de uma direcional é uma câmera
+ortográfica: a resolução da sombra é o tamanho da caixa dividido pelo tamanho do
+mapa. Uma caixa que contivesse o planeta — 30 000 unidades — daria **quinze
+metros por texel** num mapa de 2048. Nenhuma árvore projetaria nada.
+
+Por isso a caixa segue o **jogador**, não o planeta: 170 unidades de meia-aresta
+ao redor da câmera, empurradas 40% do raio na direção do olhar (metade da caixa
+atrás do observador é volume gasto). Dá ~0,17 unidade por texel — sombra de
+galho. `src/world/Sombras.js`.
+
+Três detalhes sem os quais isso não funciona:
+
+- **Encaixe na grade de texels.** Mover o centro por uma fração de texel remapeia
+  a que texel cada ponto do mundo pertence, e a borda de toda sombra da tela
+  reamostra a cada quadro. O sintoma é a sombra *fervendo* ao andar devagar —
+  justamente o caso que deveria ser o mais calmo. O centro é arredondado para um
+  múltiplo inteiro de texel nos eixos da câmera de sombra.
+- **A luz virtual fica a 900 unidades, não a 60 000.** Como a projeção é
+  ortográfica, só a direção importa: aproximar não muda uma única sombra e
+  devolve toda a precisão do depth buffer da sombra.
+- **`normalBias` de 0,65 fazendo o trabalho, `bias` quase zerado.** Um `bias`
+  grande o bastante para o terreno rasante descolaria a sombra do pé da árvore
+  (*peter-panning*); empurrar ao longo da normal é proporcional ao erro real de
+  um texel e não descola nada.
+
+Desvanece nas duas pontas — sol rasante (as sombras ficariam mais longas que a
+caixa e entrariam e sairiam dela conforme o jogador anda) e altitude, onde não há
+o que projetar. Acima de 900 unidades `castShadow` vai a falso e o three deixa de
+percorrer a cena pela câmera de sombra: no espaço o custo volta inteiro.
+
+Medido: **0,6 ms por quadro** perto do solo (1,7 ms contra 1,1 ms).
+`?sombras=off` desliga.
+
+### 3.16.3 Ambiente por imagem (IBL)
+
+`MeshStandardMaterial` **sem `envMap` não tem reflexo especular do ambiente** —
+só o do sol. Um metal não tem cor difusa nenhuma; ele é feito só de reflexo.
+Então o casco da nave, com `metalness: 0.85`, era literalmente um cinza morto com
+um pontinho de brilho. A hemisférica que havia antes não resolve: ela devolve uma
+cor para cima e outra para baixo, sem nenhuma noção de direção no meio.
+
+`src/world/CeuAmbiente.js` desenha um céu procedural (gradiente zênite →
+horizonte → chão, mais o disco solar) numa cena minúscula e passa pelo
+`PMREMGenerator`. A partir daí **todo** material padrão da cena — terreno, props,
+nave, peças de construção — recebe ambiente direcional sem nenhuma alteração nos
+materiais.
+
+- A pré-filtragem custa alguns milissegundos, então o mapa só é refeito quando as
+  entradas se afastam do que gerou o atual: algumas vezes por minuto durante o
+  ciclo dia/noite, nenhuma com o sol parado.
+- A direção do sol entra em espaço **local**: "para cima" na superfície é a normal
+  do terreno, não o eixo Y do mundo. Sem converter, o céu do IBL estaria deitado
+  em qualquer ponto que não fosse o polo norte.
+- A hemisférica caiu para **um terço** do valor antigo. Manter as duas somaria o
+  preenchimento duas vezes, e luz ambiente é exatamente o que apaga a sombra
+  recém-conquistada.
+
+### 3.16.4 Textura procedural do terreno, e um erro de escala
+
+O terreno tem cor por vértice, e entre vértices o rasterizador só interpola — daí
+o aspecto de chapa lisa. `src/shaders/SurfaceDetail.js` injeta variação em três
+escalas no `MeshStandardMaterial` via `onBeforeCompile`:
+
+| escala | tamanho | desvanece |
+|---|---|---|
+| grão | ~3 e ~12 unidades | 120 → 700 |
+| meso | ~50 unidades | 2 500 → 6 000 |
+| macro | ~450 unidades | nunca |
+
+O macro é o que faltava: o grão resolve o pixel a dois metros do olho e some a
+700 unidades (mais que isso vira chiado que cintila), mas a paisagem vista de
+cima é quase toda feita do que está além disso — e ali não sobrava variação
+nenhuma. A esta escala uma feição continua tendo dezenas de pixels mesmo do alto
+da atmosfera.
+
+A variação vai quase toda para **saturação e matiz**, e só um pouco para o
+brilho: mancha clara/escura em alta frequência o olho lê como sujeira, não como
+material. Há também variação de **rugosidade**, que separa duas manchas de mesma
+cor assim que o sol rasa.
+
+> **O erro que custou três rodadas de captura.** Todo ajuste escalava
+> `(_fbm - 0.5)` por uma força, e eu tratava esse termo como se cobrisse
+> [-0,5, 0,5]. Não cobre: ruído de valor já se concentra perto de 0,5, e a soma
+> ponderada de três oitavas concentra mais ainda — a excursão real fica em torno
+> de ±0,17. Era um multiplicador silencioso de **um terço** sobre cada número
+> calibrado, e eu passei três rodadas convencido de que o problema estava na
+> fórmula de cor. A função `_var` leva a excursão a [-1, 1] e faz cada força
+> significar de fato a fração do efeito no seu pico. É o mesmo engano de
+> concentração central que já tinha aparecido na mistura de umidade dos biomas.
+
+Os uniformes ficam expostos em `material.userData.detalhe` para calibração ao
+vivo — sem isso, ajustar qualquer número exige recarregar e esperar o mundo
+inteiro reaparecer, que é calibrar no escuro.
+
+### 3.16.5 Desempenho: onde o tempo estava indo
+
+Relato: **10 fps em máquinas fracas, no planeta**. Medindo com
+`EXT_disjoint_timer_query_webgl2` (o relógio da CPU não serve — ele mede quanto
+tempo levou para *enfileirar* os comandos, não o que a GPU gastou):
+
+| cena | GPU por quadro, 1280×720 |
+|---|---|
+| tudo ligado | **5,73 ms** |
+| escondendo só as cascas de nuvem | **0,65 ms** |
+
+As nuvens eram **quase 90% do custo**, e havia **cinco cascas** desenhadas ao
+mesmo tempo — uma por corpo do sistema, incluindo mundos a oitenta mil unidades,
+cujas nuvens juntas custavam mais que as do planeta onde o jogador estava
+pousado.
+
+Isso explica o sintoma ser pior *no planeta*: ray marching é custo de fragmento
+puro, escala com a área de tela coberta, e ao nível do solo a casca cobre o céu
+inteiro — o pior caso possível para uma GPU integrada.
+
+O que mudou:
+
+- **Corte de nuvens por distância de 12× para 4,5×** a casca externa. A perda é
+  desprezível (a essa distância a nuvem já está no fim do desvanecimento), e
+  elimina de uma vez as cascas dos corpos que não são o ativo.
+- **Escala de resolução** (`Engine.definirEscalaResolucao`). Como quase todo o
+  custo é de fragmento, desenhar a cena a 85% da largura e altura corta ~28% do
+  trabalho de **todos** os passes de uma vez. É a única alavanca que ataca o
+  problema inteiro em vez de uma peça dele. A interface não passa por ela — é
+  DOM, sempre na resolução nativa —, que é o que torna a troca aceitável.
+- **Teto de `devicePixelRatio` de 2 para 1,5** por padrão. Num portátil HiDPI
+  fraco, 2 quadruplica os fragmentos antes de qualquer outra conta.
+- **Padrão passou de "tudo no máximo" para "equilibrado".** O controlador
+  automático das nuvens só descia *depois* de medir quadros ruins — ou seja,
+  todo jogador de máquina fraca via o jogo engasgar antes de melhorar. Começar
+  no meio inverte isso.
+
+Medido na mesma cena congelada: **Desempenho 0,29 ms** contra **Alto 2,50 ms**.
+
+### 3.16.6 Menu de pausa e opções gráficas
+
+`Esc` abre. O mundo congela (física, LOD, fauna, sentinelas, rede) mas **continua
+sendo desenhado**, atrás de um vidro fosco: o menu tem opções gráficas, e o
+jogador precisa ver o efeito de cada uma sobre a cena real. Um menu sobre tela
+preta obrigaria a fechar, olhar, reabrir e adivinhar.
+
+Pela mesma razão, o menu mostra o **custo de GPU medido em milissegundos** e o
+remede a cada mudança. Sem isso, opção gráfica é adivinhação: mexe-se num
+controle sem ter como saber se ajudou.
+
+Três predefinições (Desempenho / Equilibrado / Alto) mais controles individuais
+de escala de resolução, teto de pixels, nuvens, sombras, pós-processamento e
+detalhe do terreno. Mexer num controle individual muda a predefinição para
+*personalizado* — dizer "Alto" com sombras desligadas seria mentira. Tudo é
+gravado em `localStorage`, e os parâmetros de URL continuam vencendo o que está
+gravado, porque existem justamente para reproduzir um caso sem mexer nas
+preferências de quem relatou.
+
+### 3.16.7 Quem manda no cursor
+
+O ponteiro era travado no canvas por um ouvinte de clique que não sabia de mais
+nada. Cada modo que precisava do cursor chamava `exitPointerLock` por conta
+própria — e o clique seguinte **retravava**.
+
+O sintoma apareceu duas vezes: no menu de pausa, clicar em qualquer coisa fazia
+o cursor sumir e o menu virava inútil; no mapa galáctico era pior, porque lá o
+alvo do clique é o próprio canvas, então selecionar uma estrela travava o
+ponteiro e o mapa parava de responder ao mouse.
+
+A correção não foi acrescentar mais uma chamada de `exitPointerLock`, e sim ter
+**um** lugar que responde "o cursor está livre?" — `cursorLivre()`, verdadeiro
+com menu, mapa, painel ou chat abertos, ou antes de o jogo começar. Tanto o
+pedido de travamento quanto os manipuladores de botão o consultam, o que também
+consertou de graça o blaster disparando ao clicar no fundo escurecido do menu.
+Qualquer modo novo que precise do cursor entra nessa lista e funciona de
+imediato.
+
+### 3.17.1 Ver o que o jogo está desenhando
+
+Um endpoint `/__captura` no `vite.config.js` (só em `serve`) recebe um quadro do
+canvas e grava em `capturas/`; `src/dev/Capturas.js` posiciona a nave em pontos
+escolhidos do planeta, deixa a cena assentar e dispara a foto:
+
+```js
+const c = await import('/src/dev/Capturas.js');
+await c.ensaio();   // chão, panorâmica e beira-mar, do lado iluminado
+```
+
+Existe por uma limitação concreta: **o canvas WebGL não pode ser lido de fora do
+navegador**. Sem isso, avaliar uma mudança de shader vira descrever a tela em
+palavras — e foi exatamente assim que um defeito passou despercebido por várias
+iterações: dois uniforms declarados no JavaScript e esquecidos no GLSL faziam o
+shader do oceano falhar em silêncio, então todo ajuste de cor da água era
+invisível por construção. A primeira captura respondeu em dez segundos o que
+três rodadas de ajuste não tinham respondido.
+
+Duas armadilhas do próprio harness, aprendidas do jeito difícil:
+
+- **A hora do dia precisa ser fixa.** `elapsed` governa o ciclo dia/noite, então
+  passar o relógio real fazia o sol andar entre a escolha do ponto e o disparo:
+  o lugar era escolhido no lado iluminado e fotografado à meia-noite.
+- **A posição precisa ser reafirmada a cada quadro.** A física continua rodando,
+  e a nave despenca durante os segundos que a cena leva para carregar os chunks.
+
+`capturas/` está no `.gitignore`: é saída de ferramenta, não fonte.
 
 ---
 
@@ -1183,11 +1638,30 @@ restart zera. É o primeiro item que o MySQL (§5) resolve.
 | `F` | Sair da nave / embarcar |
 | `W A S D` | Caminhar |
 | `Shift` | Correr |
-| `Espaço` | Pular / jetpack |
+| `Espaço` | Pular / jetpack — **na água**, subir |
+| `Ctrl` / `C` | Mergulhar (só nadando) |
 | `V` | Pulso de varredura |
 | `1` `2` `3` / `Roda` | Trocar de equipamento |
 | `Tab` | Inventário e catálogo de construção |
 | `B` | Atalho para o construtor |
+
+| Mapa galáctico | |
+|---|---|
+| `N` | Abrir / fechar (o jogo PARA enquanto ele está aberto) |
+| `W A S D` | Voar pela galáxia |
+| `R` / `Q` | Subir / descer |
+| `Botão esq.` | Girar a câmera |
+| `Botão dir.` | Arrastar o mapa |
+| `Roda` | Aproximar |
+| `Duplo clique` / `Enter` | Saltar para o sistema |
+| `C` / `F` | Centrar em você / no destino |
+| `[` `]` | Trocar de galáxia |
+
+| Chat | |
+|---|---|
+| `Enter` | Abrir a linha de digitação |
+| `Tab` | Alternar entre SISTEMA e GLOBAL |
+| `Esc` | Cancelar |
 
 | Equipamento | Botão esquerdo | Botão direito |
 |---|---|---|
@@ -1209,11 +1683,13 @@ antes de usá-lo.
 
 | | |
 |---|---|
-| `?seed=12345` | reproduz o mesmo sistema estelar |
+| `?seed=12345` | reproduz o mesmo sistema estelar — e, na sala, entra no **canal** dele em vez de adotar o sistema de entrada do servidor |
 | `?mp=1` | entra na sala local (`ws://localhost:5200`); aceita outra URL |
 | `?spawn=superficie\|alto\|orbita` + `&planet=N` | nasce direto na situação, pulando a abertura |
 | `?clouds=off\|minimo\|baixo\|medio\|alto` | fixa a qualidade das nuvens |
 | `?aerial=off` | volta ao pipeline de cor antigo (§3.6.3) |
+| `?post=off` | desliga o pós-processamento (§3.16.1), para comparar lado a lado |
+| `?sombras=off` | desliga as sombras do sol (§3.16.2) |
 | `?dev=1` | instala a bancada de inspeção em `window.__dev` (só em `npm run dev`) |
 
 `M` liga/desliga o som (fica salvo). `F3` alterna wireframe (mostra a quadtree
@@ -1224,11 +1700,11 @@ cursor. No console: `__nms.activePlanet`, `__nms.inventory`, `__nms.disembark()`
 
 ## 5. Próximos passos
 
-- **Carga sob demanda por endereço espacial** — hoje o `welcome` traz todas as
-  bases e escavações do universo de uma vez. Com um sistema estelar isso não
-  muda nada; com muitos, o certo é o cliente pedir o conteúdo de um corpo quando
-  chega perto dele, indexado por um endereço (galáxia + setor + sistema +
-  planeta), como fazem os jogos do gênero.
+- **Carga sob demanda por CORPO.** Metade disto já aconteceu: o servidor virou
+  canais por sistema e carrega o mundo de cada um na primeira visita (§3.11), em
+  vez de ler o universo inteiro no boot. Falta o degrau seguinte — o cliente
+  pedir o conteúdo de um PLANETA ao chegar perto dele, em vez de receber o
+  sistema todo no `welcome`.
 - **Áudio posicional**: o som já existe (§3.9), mas é todo mono e centrado no
   jogador. Fauna e depósitos pedem `PannerNode` com a posição da câmera para
   virarem pistas de navegação em vez de decoração.
@@ -1240,8 +1716,9 @@ cursor. No console: `__nms.activePlanet`, `__nms.inventory`, `__nms.disembark()`
   e o stride do worker.
 - **Estações espaciais e comércio**: o inventário já tem `sell()` e valores de
   mercado; falta o destino onde vender.
-- **Clima**: tempestades de areia e chuva, modulando `GameState` — a
-  infraestrutura de interpolação por altitude já serve.
+- **Nuvens sem banding**: a casca é amostrada em passos grandes e a borda mostra
+  dithering em algumas altitudes (ver §6). Passos adaptativos por distância
+  resolveriam sem custar em toda a tela.
 - **LUTs de espalhamento pré-computadas** (modelo de Bruneton): o pass de
   profundidade já existe (§3.6.3), mas ainda integra por marcha a cada frame.
 - **WebGPU**: exige importar de `three/webgpu` e reescrever os shaders em
@@ -1258,6 +1735,20 @@ cursor. No console: `__nms.activePlanet`, `__nms.inventory`, `__nms.disembark()`
   do próprio cômodo.
 - **A escavação é radial**, não volumétrica: crateras e platôs sim, túneis e
   saliências não (§3.14).
+- **Não há cavernas, e não é questão de esforço.** O terreno é um campo de
+  altura — uma elevação por direção —, e caverna exige duas superfícies no mesmo
+  raio (chão e teto). As saídas reais são terreno volumétrico com marching
+  cubes, que reescreve worker, LOD e colisão, ou entradas que levam a uma cena
+  de interior separada. Os cânions são o que cabe no modelo atual: um lugar onde
+  se desce, se percorre e do qual se sai por outro ponto.
+- **Prop colhido reaparece ao trocar de nível de LOD.** A identidade do prop é
+  *(chunk, índice)*, e o índice é outro em cada nível. Antes isso se escondia no
+  ruído — todo o espalhamento mudava junto —; depois que ele foi estabilizado
+  (§3.4), o defeito ficou limpo e visível. A correção troca a identidade pela
+  CÉLULA do espalhamento e mexe no protocolo e no significado das colunas de
+  `colhido`.
+- **Nuvens com aspecto quadriculado** em algumas altitudes: a casca é amostrada
+  em passos grandes e a borda mostra dithering.
 - **O terreno deformado é compartilhado e permanente**, diferente do jogo do
   gênero — que guarda a deformação só no save local de quem cavou. Foi uma
   escolha deliberada de projeto (uma sala cooperativa em que o buraco do outro
