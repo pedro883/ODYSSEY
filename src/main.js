@@ -46,6 +46,9 @@ import { Weather, CLIMAS } from './world/Weather.js';
 import { SombrasDoSol } from './world/Sombras.js';
 import { CeuAmbiente } from './world/CeuAmbiente.js';
 import { Vitais } from './game/Vitals.js';
+import { Projeteis } from './game/Weapons.js';
+import { Blaster } from './game/Blaster.js';
+import { EDICAO } from './shared/edits.js';
 
 /* ========================================================================== */
 /* Seed                                                                       */
@@ -211,6 +214,72 @@ const ceuAmbiente = new CeuAmbiente(engine.renderer, engine.scene);
 // -----------------------------------------------------------------------------
 const vitaisJogador = new Vitais({ escudoMaximo: 100, vidaMaxima: 100 });
 const vitaisNave = new Vitais({ escudoMaximo: 260, vidaMaxima: 180 });
+
+const projeteis = new Projeteis(engine.scene);
+const blaster = new Blaster(projeteis);
+
+/**
+ * Quem atirou, para o projétil não acertar o próprio atirador.
+ *
+ * Um objeto vazio serve: a comparação é por identidade. Uma string ("jogador")
+ * pareceria mais legível e criaria uma colisão silenciosa no dia em que outro
+ * jogador da sala atirasse com o mesmo rótulo.
+ */
+const jogadorComoDono = {};
+
+/**
+ * O que acontece quando um tiro encosta em alguma coisa.
+ *
+ * Mora aqui, e não dentro de `Weapons.js`, porque a reação depende de coisas que
+ * o transporte não conhece nem deveria: o planeta ativo, a rede, o áudio e a
+ * interface. O módulo de projéteis só avisa que houve impacto e onde.
+ */
+projeteis.aoImpactar = (impacto) => {
+  if (impacto.explodiu) {
+    const e = impacto.explosao;
+    audio.terraform(false);
+
+    // --- Cratera ---------------------------------------------------------
+    // Direto no campo de edições, sem passar pelo `Terraform`: aquele é um
+    // escultor COM ESTADO, feito para o botão segurado, que agrupa quadros
+    // consecutivos na mesma edição. Uma granada é um evento único, e reutilizar
+    // o escultor faria duas granadas próximas se fundirem num buraco só.
+    _reference.copy(impacto.ponto);
+    const amostra = activePlanet.sampleAt(_reference);
+    // Só abre cratera se explodiu perto do chão: uma granada que erra e some no
+    // ar não pode cavar o terreno a cem unidades abaixo dela.
+    if (amostra.altitude < 4) {
+      const edicao = {
+        id: `gr${(Math.random() * 1e9) | 0}`,
+        x: amostra.direction.x,
+        y: amostra.direction.y,
+        z: amostra.direction.z,
+        r: e.raioCratera,
+        f: e.cratera,
+        t: EDICAO.SOMAR,
+      };
+      if (activePlanet.aplicarEdicao(edicao)) {
+        multiplayer?.terraformou(starSystem.planets.indexOf(activePlanet), edicao);
+      }
+    }
+
+    // --- Dano em área ----------------------------------------------------
+    // Cai com a distância em vez de ser chapado no raio: dano uniforme faz a
+    // borda da explosão virar uma parede invisível, onde meio passo separa
+    // levar tudo de não levar nada.
+    for (const alvo of activePlanet.fauna.alvos()) {
+      const d = alvo.posicao.distanceTo(impacto.ponto);
+      if (d > e.raio) continue;
+      alvo.vitais.aplicarDano(e.dano * (1 - d / e.raio), impacto.dono);
+    }
+    return;
+  }
+
+  if (impacto.alvo) {
+    audio.collect();
+    if (impacto.morreu) hud.notify('CRIATURA ABATIDA', 1.4);
+  }
+};
 const inventory = new Inventory();
 const discovery = new Discovery();
 const scanner = new Scanner(engine.scene);
@@ -323,7 +392,13 @@ function inscreverNaOrigemFlutuante() {
     .limpar()
     .add(...starSystem.planets.map((planet) => planet.group))
     .add(ship.group, scanner.pulse, scanner.beam, terraform.marcador)
-    .addVector(playerController.position);
+    .addVector(playerController.position)
+    // Os tiros guardam posição de cena por conta própria (a malha instanciada
+    // fica na origem), então precisam de tratamento e não de deslocamento do
+    // objeto. Sem isto, cada recentragem lançaria todo tiro vivo a milhares de
+    // unidades — e como o rebase acontece justamente ao voar rápido, o sintoma
+    // apareceria só no combate de naves.
+    .onShift((delta) => projeteis.deslocar(delta));
 }
 
 inscreverNaOrigemFlutuante();
@@ -1368,6 +1443,23 @@ function updateTools(dt) {
 
   build.mirar(_eye, _lookDir, activePlanet); // `ativo` falso: esconde o fantasma
 
+  // --- Blaster ------------------------------------------------------------
+  if (equipado.id === 'blaster') {
+    scanner.updateBeam(null, null);
+    scanner.target = null;
+    terraform.mirar(_eye, _lookDir, activePlanet, false);
+
+    if (botao.esquerdo && blaster.primario(_eye, _lookDir, jogadorComoDono)) {
+      viewModel.coice(0.5);
+      audio.terraform(true);
+    }
+    if (botao.direito && blaster.secundario(_eye, _lookDir, jogadorComoDono)) {
+      viewModel.coice(1.0);
+      audio.terraform(false);
+    }
+    return;
+  }
+
   // --- Terraformador ------------------------------------------------------
   if (equipado.id === 'terraformador') {
     scanner.updateBeam(null, null);
@@ -1732,6 +1824,10 @@ engine.start((dt, elapsed) => {
   if (started) {
     vitaisJogador.atualizar(dt);
     vitaisNave.atualizar(dt);
+    blaster.atualizar(dt);
+    // Os tiros avançam DEPOIS da física e ANTES da câmera: assim o impacto é
+    // resolvido contra as posições deste quadro, e não contra as do anterior.
+    projeteis.atualizar(dt, activePlanet, activePlanet.fauna.alvos());
   }
 
   if (started) checkPlanetDiscovery(activePlanet, gameState.altitude);
@@ -2019,7 +2115,7 @@ window.__nms = {
   engine, starSystem, ship, shipController, playerController,
   gameState, inventory, discovery, scanner, seed: SEED, cloudQuality, audio,
   floatingOrigin, multiplayer, build, terraform, viewModel, galaxyMap, warp, weather,
-  vitaisJogador, vitaisNave, sombras, ceuAmbiente,
+  vitaisJogador, vitaisNave, sombras, ceuAmbiente, projeteis, blaster, jogadorComoDono,
   saltarPara, alternarMapa,
   get ferramenta() { return ferramentaAtual(); },
   equipar,

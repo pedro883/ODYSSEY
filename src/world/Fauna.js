@@ -24,6 +24,7 @@ import * as THREE from 'three';
 import { mulberry32 } from '../shared/noise.js';
 import { assets } from '../assets/AssetLibrary.js';
 import { FAUNA_SPECIES } from '../assets/manifest.js';
+import { Vitais } from '../game/Vitals.js';
 
 /** Criaturas vivas ao mesmo tempo. Ver a nota de custo acima. */
 const POOL_SIZE = 12;
@@ -48,6 +49,8 @@ const _quat = new THREE.Quaternion();
 const _yawQuat = new THREE.Quaternion();
 const _delta = new THREE.Vector3();
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
+/** Temporário exclusivo de `alvos()`: `_up` é usado por `_updateCreature`. */
+const _alvoCima = new THREE.Vector3();
 const _box = new THREE.Box3();
 const _size = new THREE.Vector3();
 
@@ -143,12 +146,65 @@ export class Fauna {
 
     for (let i = this.creatures.length - 1; i >= 0; i--) {
       const criatura = this.creatures[i];
-      if (criatura.object.position.distanceTo(reference) > DESPAWN) {
+      // ---------------------------------------------------------------------
+      // A POSIÇÃO PRECISA VIRAR MUNDO ANTES DA COMPARAÇÃO.
+      //
+      // `object.position` é LOCAL ao grupo do planeta e `reference` é de cena.
+      // Os dois coincidem enquanto o planeta está na origem — que é o caso no
+      // primeiro minuto de jogo, e por isso o defeito passou despercebido. Ao
+      // primeiro rebase da origem flutuante o grupo do planeta ganha um
+      // deslocamento de milhares de unidades, a distância medida estoura o
+      // `DESPAWN` para TODA criatura, e a fauna some do planeta inteiro no
+      // quadro seguinte ao nascimento.
+      //
+      // O sintoma era "não tem bicho nenhum neste mundo", com o contador em
+      // zero e nenhum erro no console. `_updateCreature` já fazia a conversão
+      // certa logo abaixo; só esta linha ficou para trás.
+      // ---------------------------------------------------------------------
+      _delta.copy(criatura.object.position).add(this.planet.group.position);
+      if (_delta.distanceTo(reference) > DESPAWN) {
+        this._remove(i);
+        continue;
+      }
+      // Abatida: sai no mesmo lugar em que a distância a tira. Some na hora,
+      // sem animação de morte — os modelos do pacote não têm clipe para isso, e
+      // deixar o corpo parado em pose de caminhada seria pior que removê-lo.
+      if (!criatura.vitais.vivo) {
         this._remove(i);
         continue;
       }
       this._updateCreature(criatura, dt, reference);
     }
+  }
+
+  /**
+   * Criaturas atacáveis, em espaço de CENA.
+   *
+   * A conversão acontece aqui, e não em quem atira, porque só a fauna sabe que
+   * suas posições são locais ao grupo do planeta. Reaproveita os objetos do
+   * array entre chamadas: isto roda todo quadro durante o combate, e alocar
+   * doze objetos por quadro é exatamente o tipo de lixo que faz o coletor
+   * acordar no pior momento.
+   *
+   * @param {Array} [saida]
+   */
+  alvos(saida = this._alvos ?? (this._alvos = [])) {
+    saida.length = 0;
+    for (const criatura of this.creatures) {
+      if (!criatura.vitais.vivo) continue;
+      const slot = criatura._slotAlvo ?? (criatura._slotAlvo = { posicao: new THREE.Vector3() });
+      slot.posicao.copy(criatura.object.position).add(this.planet.group.position);
+      // Meio corpo acima do pé: a origem do modelo fica no chão, e mirar nela
+      // exigiria acertar os tornozelos. O "para cima" é a normal do planeta,
+      // que é a própria posição local normalizada.
+      _alvoCima.copy(criatura.object.position).normalize();
+      slot.posicao.addScaledVector(_alvoCima, (criatura.especie.altura ?? 1.4) * 0.5);
+      slot.raio = criatura.raioAlvo;
+      slot.vitais = criatura.vitais;
+      slot.criatura = criatura;
+      saida.push(slot);
+    }
+    return saida;
   }
 
   _spawn(reference) {
@@ -197,6 +253,23 @@ export class Fauna {
       especie,
       estado: '',
       timer: 0,
+      /**
+       * Vitais da criatura.
+       *
+       * Escudo zero de propósito: escudo é tecnologia, e um bicho não tem. A
+       * classe aceita isso sem caso especial — dano com escudo em zero vai
+       * inteiro para a blindagem, que é exatamente a regra que se quer aqui.
+       *
+       * A vida escala com a altura da espécie: acertar um bicho do tamanho de
+       * um cavalo não pode custar o mesmo que acertar um do tamanho de um
+       * cachorro, e a altura é a única medida de porte que já existe.
+       */
+      vitais: new Vitais({
+        escudoMaximo: 0,
+        vidaMaxima: Math.round(22 + (especie.altura ?? 1.4) * 26),
+      }),
+      /** Raio de acerto, derivado do porte. Ver `Weapons._cruzaEsfera`. */
+      raioAlvo: Math.max(0.5, (especie.altura ?? 1.4) * 0.42),
       heading: _tangent.clone().applyAxisAngle(_up, this._rand() * Math.PI * 2),
       velocidade: 0,
     };

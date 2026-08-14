@@ -43,6 +43,17 @@ export const FERRAMENTAS = [
     modelo: 'ferramenta/blaster-p.glb',
     cor: 0x8ef0a8,
   },
+  {
+    id: 'blaster',
+    nome: 'Blaster de Plasma',
+    acao: 'disparar',
+    secundaria: 'granada',
+    // Reaproveita o modelo da multiferramenta: os três `blaster-*.glb` do pacote
+    // já estão em uso pelas outras ferramentas, e o `-d` é o que mais parece uma
+    // arma. Trocar por arte própria é uma questão de asset, não de código.
+    modelo: 'ferramenta/blaster-d.glb',
+    cor: 0x9ef0ff,
+  },
 ];
 
 export const FERRAMENTA_POR_ID = new Map(FERRAMENTAS.map((f) => [f.id, f]));
