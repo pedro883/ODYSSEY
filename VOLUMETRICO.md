@@ -67,10 +67,21 @@ toda divergência é defeito do mesher, não mudança de conteúdo.
       eixos. É o passo com mais risco de regressão de desempenho: um bloco de
       32³ tem 32x as amostras de um retalho 32².
 
-- [ ] **4. Colisão e altitude**
-      `sampleAt()` hoje responde com uma amostra. Com volume é preciso marchar
-      ao longo do raio. Afeta nave, jogador, fauna, projéteis e props — é o
-      passo que mais toca código existente.
+- [x] **4a. Sonda do campo (`sonda.js`)**
+      `chaoAbaixo`, `tetoAcima`, `solidoEm` por marcha radial com bisseção.
+
+      **A marcha é barata pelo mesmo motivo que o chunk é**: ela é RADIAL, a
+      direção não muda ao longo dela, e a altura da superfície só depende da
+      direção. `heightAt` é avaliado uma vez por marcha, não por passo. Medido:
+      3,7 µs por marcha de 400 unidades, contra 0,88 µs de um `heightAt` sozinho
+      — sem o truque seriam ~176 µs.
+
+      Verificado: sem cavernas a sonda acha o chão em 400 de 400 direções com
+      erro máximo de 0,0002 unidade, isto é, reproduz a colisão de hoje.
+
+- [ ] **4b. Trocar `sampleAt` pelos resultados da sonda**
+      Afeta nave, jogador, fauna, projéteis e props. É o passo que mais toca
+      código existente, e o único que pode piorar o jogo se sair errado.
 
 - [ ] **5. Costuras entre níveis de LOD**
       Hoje resolvidas por saia. Em volume, exige algo como transvoxel, ou

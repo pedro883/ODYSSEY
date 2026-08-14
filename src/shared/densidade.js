@@ -177,12 +177,30 @@ export function criarCampoDeDensidade(cfg, heightAt) {
 
     const vazio = clamp(tuneis(x, y, z) + camaras(x, y, z) * C.pesoCamara, 0, 1);
 
-    // A escavação SOMA densidade (empurra para o positivo, isto é, para o ar).
-    // Multiplicada pela abertura, ela desaparece suavemente nas duas margens em
-    // vez de terminar num degrau — degrau em campo de densidade vira parede
-    // perfeitamente plana no mesher, e o olho identifica isso na hora.
-    d += vazio * abertura * C.forca;
-    return d;
+    // -------------------------------------------------------------------
+    // SUBTRAÇÃO BOOLEANA, E NÃO SOMA. O PORQUÊ CUSTOU UMA MEDIÇÃO.
+    //
+    // A primeira versão fazia `d += vazio * abertura * forca`. Parece razoável
+    // e é estruturalmente errado: `d` é uma distância. A 150 unidades de
+    // profundidade ele vale -150, e somar `forca` (26) devolve -124 — ainda
+    // rocha maciça. A escavação só vencia onde a profundidade era menor que a
+    // força, isto é, exatamente na faixa que `margemTeto` já suprimia.
+    //
+    // O sintoma foi medido, não visto: 0,16% de vazio no subsolo, e
+    // praticamente insensível à espessura do túnel — que é a assinatura de um
+    // parâmetro que não está no caminho crítico.
+    //
+    // O certo é tratar a caverna como um SÓLIDO PRÓPRIO e subtraí-la do
+    // terreno, que é a operação CSG de sempre: `max(terreno, cavidade)`. Assim
+    // a cavidade vale por si, independentemente de quão fundo está.
+    // -------------------------------------------------------------------
+    const cavidade = (vazio - C.limiarVazio) * C.escala;
+    const comCaverna = Math.max(d, cavidade);
+
+    // A interpolação pela abertura vai entre "sem caverna" e "com caverna", e
+    // não sobre o valor da cavidade. Multiplicar a cavidade pela abertura
+    // deixaria `max(d, 0)` nas margens — ou seja, ar em toda parte.
+    return d + (comCaverna - d) * abertura;
   }
 
   return { densidadeEm, densidadeComAltura, superficieEm, raio };
@@ -205,8 +223,17 @@ export const PADRAO_CAVERNAS = {
   freqCamara: 0.0009,
   limiarCamara: 0.62,
   pesoCamara: 0.8,
-  /** Quanto de densidade a escavação soma no pico. */
-  forca: 26,
+  /**
+   * Acima deste valor de `vazio` há cavidade. Governa quão RARA ela é.
+   */
+  limiarVazio: 0.42,
+  /**
+   * Converte o campo de cavidade (adimensional) em unidades de mundo.
+   *
+   * É o raio típico do túnel: com 22, o centro da cavidade fica ~13 unidades
+   * "dentro do ar", o que dá um vão que uma pessoa atravessa em pé.
+   */
+  escala: 22,
   /** Rocha sólida preservada logo abaixo da superfície, em unidades. */
   margemTeto: 26,
   /** Até onde a rede desce, em unidades abaixo da superfície. */
