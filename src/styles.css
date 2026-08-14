@@ -162,6 +162,10 @@ body {
      de onde o jogador estava, e voltar deixa de ser desorientador. */
   background: rgba(2, 8, 14, 0.72);
   backdrop-filter: blur(6px);
+  /* Explícito, mesmo sendo o padrão: este elemento já nasceu uma vez dentro do
+     #hud (que é `pointer-events: none`) e herdou a inércia. Declarar aqui faz
+     com que colocá-lo no lugar errado deixe de ser silencioso. */
+  pointer-events: auto;
 }
 
 #pausa.hidden { display: none; }

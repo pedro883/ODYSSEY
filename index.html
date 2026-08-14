@@ -171,9 +171,31 @@
       <!-- Clarão vermelho ao levar dano. Fora dos painéis e sem captura de
            clique: cobre a tela inteira e não pode interceptar o mouse. -->
       <div id="hud-dano"></div>
-      <!-- Menu de pausa. Fora dos painéis do HUD porque cobre a tela inteira e
-           precisa receber clique (os painéis são `pointer-events: none`). -->
-      <div id="pausa" class="hidden">
+
+      <!-- Nível de alerta das sentinelas. Vazio e oculto em nível zero: um
+           medidor sempre presente ensinaria o jogador a ignorá-lo. -->
+      <div id="hud-alerta" class="off"><span class="estrelas"></span><b>PROCURADO</b></div>
+      <div id="hud-banner"></div>
+      <div id="discovery" class="hidden">
+        <div class="disc-tag">DESCOBERTA REGISTRADA</div>
+        <div class="disc-name" id="disc-name">—</div>
+        <div class="disc-sub" id="disc-sub">—</div>
+        <div class="disc-units" id="disc-units">+0 unidades</div>
+      </div>
+    </div>
+
+    <!--
+      ================= Menu de pausa =================
+
+      IRMÃO do #hud, e nunca filho dele. Duas razões, e as duas já custaram um
+      relato de "não consigo clicar no menu":
+
+        1. `#hud` é `pointer-events: none` — ele é uma camada de leitura. Filhos
+           herdam isso, então o menu inteiro ficava visível e inerte.
+        2. `#hud.hidden` zera a opacidade. Com o HUD escondido (tela inicial,
+           mapa galáctico) o menu sumiria junto.
+    -->
+    <div id="pausa" class="hidden">
         <div class="pausa-caixa">
           <header>PAUSADO</header>
 
@@ -213,17 +235,6 @@
           <button id="pausa-voltar">VOLTAR AO JOGO</button>
         </div>
       </div>
-      <!-- Nível de alerta das sentinelas. Vazio e oculto em nível zero: um
-           medidor sempre presente ensinaria o jogador a ignorá-lo. -->
-      <div id="hud-alerta" class="off"><span class="estrelas"></span><b>PROCURADO</b></div>
-      <div id="hud-banner"></div>
-      <div id="discovery" class="hidden">
-        <div class="disc-tag">DESCOBERTA REGISTRADA</div>
-        <div class="disc-name" id="disc-name">—</div>
-        <div class="disc-sub" id="disc-sub">—</div>
-        <div class="disc-units" id="disc-units">+0 unidades</div>
-      </div>
-    </div>
 
     <!--
       ================= Mapa galáctico (N) =================
