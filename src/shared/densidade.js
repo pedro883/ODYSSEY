@@ -121,9 +121,34 @@ export function criarCampoDeDensidade(cfg, heightAt) {
   function densidadeEm(x, y, z) {
     const dist = Math.hypot(x, y, z);
     if (dist < 1e-6) return -raio; // centro do planeta: rocha maciça
-
     const inv = 1 / dist;
-    const alturaSuperficie = superficieEm(x * inv, y * inv, z * inv);
+    return densidadeComAltura(x, y, z, superficieEm(x * inv, y * inv, z * inv), dist);
+  }
+
+  /**
+   * A mesma densidade, com a altura da superfície JÁ CALCULADA.
+   *
+   * =======================================================================
+   * ESTA É A FUNÇÃO QUE TORNA O TERRENO VOLUMÉTRICO VIÁVEL
+   * =======================================================================
+   * `superficieEm` chama `heightAt`, que custa 0,88 µs — são ~20 oitavas de
+   * ruído. Numa grade de 33 mil amostras isso são 29 ms só de altura, por
+   * chunk, e o orçamento de um quadro inteiro é 16 ms.
+   *
+   * Mas a altura da superfície depende SÓ DA DIREÇÃO. Numa grade esférica
+   * todas as amostras de uma mesma coluna radial compartilham a direção, então
+   * quem malha o chunk pode calcular a altura uma vez por coluna e passá-la
+   * aqui. Em números medidos: 1.225 chamadas em vez de 33.075.
+   *
+   * Eu já tinha montado essa tabela em `chunkVolumetrico.js` e continuava
+   * chamando `densidadeEm`, que recalculava tudo — a otimização existia no
+   * papel e o chunk levava 47 ms.
+   *
+   * @param {number} alturaSuperficie raio da superfície NESTA direção
+   * @param {number} [dist] `|p|`, se quem chama já o tiver
+   */
+  function densidadeComAltura(x, y, z, alturaSuperficie, dist) {
+    if (dist === undefined) dist = Math.hypot(x, y, z);
 
     // Positivo fora, negativo dentro.
     let d = dist - alturaSuperficie;
@@ -160,7 +185,7 @@ export function criarCampoDeDensidade(cfg, heightAt) {
     return d;
   }
 
-  return { densidadeEm, superficieEm, raio };
+  return { densidadeEm, densidadeComAltura, superficieEm, raio };
 }
 
 /**

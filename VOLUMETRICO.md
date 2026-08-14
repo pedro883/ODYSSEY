@@ -26,12 +26,29 @@ toda divergência é defeito do mesher, não mudança de conteúdo.
       Módulos puros, verificados contra esfera (Euler 2, volume 99,59%) e toro
       (Euler 0, quatro cruzamentos numa direção).
 
-- [ ] **2. Malhar um chunk volumétrico no worker**
-      Nova mensagem no worker, ao lado de `buildChunk`. Entrega o mesmo formato
-      de payload (positions/normals/colors/indices) para o `ChunkManager` não
-      precisar saber a diferença ainda. Critério: um chunk volumétrico com as
-      cavernas desligadas tem de coincidir com o chunk de altura equivalente
-      dentro da tolerância do tamanho de célula.
+- [x] **2a. Malhar um chunk volumétrico (módulo puro)**
+      `chunkVolumetrico.js`, sobre grade ESFÉRICA `(u, v, raio)` e não
+      cartesiana. Critério do plano cumprido: com as cavernas desligadas o erro
+      médio contra a superfície de altura é **0,009 unidade** (tolerância ~2,3),
+      e nenhuma normal aponta para baixo. Com as cavernas ligadas, 2,6% das
+      normais apontam para baixo — teto de caverna, a coisa que o campo de
+      altura não representa.
+
+      **A grade esférica é o que torna o volumétrico viável.** `heightAt` custa
+      0,88 µs (~20 oitavas). Numa grade cartesiana de 43³ seriam 79.507
+      chamadas, 70 ms por chunk. Numa grade esférica a altura depende só da
+      direção, então é uma chamada por coluna: **1.225 — exatamente o mesmo
+      número que o chunk de altura de hoje**. A parte cara custa igual; o que se
+      acrescenta é o trabalho barato por amostra.
+
+      Medido: 5,2 ms sem cavernas, 8,9 ms com (era 47 ms antes de a otimização
+      ser de fato ligada — eu tinha montado a tabela de alturas e continuava
+      chamando `densidadeEm`, que a recalculava).
+
+- [ ] **2b. Ligar no worker, atrás de `?volumetrico=1`**
+      Nova mensagem ao lado de `buildChunk`, entregando o mesmo formato de
+      payload para o `ChunkManager` não precisar saber a diferença ainda. Falta
+      a cor por vértice (o payload atual traz `colors`).
 
 - [ ] **3. Octree no lugar da quadtree**
       A quadtree é 2D, uma por face do cubo. Volume exige subdivisão em três

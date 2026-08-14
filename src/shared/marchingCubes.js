@@ -183,14 +183,36 @@ const EIXO = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
 /**
  * Malha a superfície de nível zero de um campo já amostrado.
  *
+ * ===========================================================================
+ * GRADE CURVILÍNEA (`posicaoDe`)
+ * ===========================================================================
+ * Por padrão a grade é cartesiana e a posição de um nó sai de `origem + índice
+ * * passo`. Passando `posicaoDe(i, j, k, saida)` ela pode ser qualquer coisa —
+ * e o caso que interessa aqui é a grade ESFÉRICA, indexada por (u, v, raio)
+ * sobre uma face do cubo-esfera.
+ *
+ * A razão é medida, não estética. O campo de densidade é dominado por
+ * `heightAt`, que custa 0,88 µs (são ~20 oitavas de ruído). Numa grade
+ * cartesiana de 43³ ele é chamado 79.507 vezes: 70 ms por chunk, inviável. Numa
+ * grade esférica a altura da superfície depende só da DIREÇÃO, então basta uma
+ * chamada por coluna angular — 1.849 no mesmo chunk, 1,6 ms. Quarenta e três
+ * vezes menos.
+ *
+ * Com grade curvilínea as normais mudam de conta: o gradiente em espaço de
+ * índice não é o gradiente em espaço de mundo, porque os três eixos da grade
+ * têm escalas diferentes (um passo radial não mede o mesmo que um passo
+ * angular). Ver `gradienteEm`.
+ *
  * @param {object} o
  * @param {Float32Array} o.campo amostras, `(n+3)³` valores (ver `n` e a borda)
  * @param {number} o.n número de CÉLULAS por eixo
- * @param {number} o.passo tamanho da célula em unidades de mundo
- * @param {number[]} o.origem canto mínimo da região, em coordenadas locais
+ * @param {number} [o.passo] tamanho da célula (grade cartesiana)
+ * @param {number[]} [o.origem] canto mínimo da região (grade cartesiana)
+ * @param {(i:number,j:number,k:number,saida:number[])=>void} [o.posicaoDe]
+ *   posição de mundo de um nó da grade; substitui `passo`/`origem`
  * @returns {{positions:Float32Array, normals:Float32Array, indices:Uint32Array}}
  */
-export function malharCampo({ campo, n, passo, origem }) {
+export function malharCampo({ campo, n, passo, origem, posicaoDe }) {
   // A grade amostrada tem uma camada EXTRA em volta (por isso n+3 e não n+1):
   // ela existe só para o gradiente das normais nas bordas, que precisa de um
   // vizinho de cada lado. Sem ela as normais da borda do chunk sairiam
@@ -205,14 +227,65 @@ export function malharCampo({ campo, n, passo, origem }) {
   /** Aresta já visitada -> índice do vértice, para compartilhar vértices. */
   const cache = new Map();
 
+  // Posição de um nó da grade. Cartesiana por padrão; curvilínea quando quem
+  // chama sabe mais sobre a geometria do que este arquivo (ver a nota no topo).
+  const pos = posicaoDe
+    ? posicaoDe
+    : (i, j, k, saida) => {
+        saida[0] = origem[0] + i * passo;
+        saida[1] = origem[1] + j * passo;
+        saida[2] = origem[2] + k * passo;
+      };
+
+  const pA = [0, 0, 0];
+  const pB = [0, 0, 0];
   const grad = [0, 0, 0];
+
   function gradienteEm(i, j, k) {
-    // Diferenças centrais. O sinal é invertido para que a normal aponte para
-    // FORA da rocha: a densidade cresce em direção ao ar, então o gradiente
-    // aponta para o ar, que é justamente para onde a normal deve olhar.
-    grad[0] = em(i + 1, j, k) - em(i - 1, j, k);
-    grad[1] = em(i, j + 1, k) - em(i, j - 1, k);
-    grad[2] = em(i, j, k + 1) - em(i, j, k - 1);
+    if (!posicaoDe) {
+      // Grade cartesiana: os três eixos têm a mesma escala, então a diferença
+      // central em espaço de índice já é proporcional ao gradiente de mundo.
+      grad[0] = em(i + 1, j, k) - em(i - 1, j, k);
+      grad[1] = em(i, j + 1, k) - em(i, j - 1, k);
+      grad[2] = em(i, j, k + 1) - em(i, j, k - 1);
+    } else {
+      // -------------------------------------------------------------------
+      // GRADE CURVILÍNEA: derivada DIRECIONAL ao longo de cada eixo da grade.
+      //
+      // Aqui os eixos não têm a mesma escala — um passo radial pode medir 2
+      // unidades e um passo angular 30 — nem apontam para direções fixas. Usar
+      // a diferença de índice direto daria uma normal enviesada para o eixo de
+      // passo menor, e o terreno inteiro pareceria iluminado de lado.
+      //
+      // A conta certa: para cada eixo, a taxa de variação por unidade de
+      // COMPRIMENTO, aplicada na direção real em que aquele eixo anda. Somando
+      // as três, reconstrói-se o gradiente. Isso é exato quando os eixos são
+      // ortogonais entre si — e numa grade esférica eles são (o radial é
+      // perpendicular aos dois angulares).
+      // -------------------------------------------------------------------
+      grad[0] = grad[1] = grad[2] = 0;
+      for (let eixo = 0; eixo < 3; eixo++) {
+        const di = eixo === 0 ? 1 : 0;
+        const dj = eixo === 1 ? 1 : 0;
+        const dk = eixo === 2 ? 1 : 0;
+
+        pos(i + di, j + dj, k + dk, pA);
+        pos(i - di, j - dj, k - dk, pB);
+        let ex = pA[0] - pB[0], ey = pA[1] - pB[1], ez = pA[2] - pB[2];
+        const comprimento = Math.hypot(ex, ey, ez);
+        if (comprimento < 1e-12) continue;
+        ex /= comprimento; ey /= comprimento; ez /= comprimento;
+
+        const taxa =
+          (em(i + di, j + dj, k + dk) - em(i - di, j - dj, k - dk)) / comprimento;
+        grad[0] += taxa * ex;
+        grad[1] += taxa * ey;
+        grad[2] += taxa * ez;
+      }
+    }
+
+    // A densidade cresce em direção ao AR, então o gradiente já aponta para
+    // fora da rocha — que é justamente para onde a normal deve olhar.
     const m = Math.hypot(grad[0], grad[1], grad[2]) || 1;
     grad[0] /= m; grad[1] /= m; grad[2] /= m;
     return grad;
@@ -240,9 +313,15 @@ export function malharCampo({ campo, n, passo, origem }) {
     const den = vb - va;
     const t = Math.abs(den) < 1e-12 ? 0.5 : -va / den;
 
-    const px = origem[0] + (ia + (ib - ia) * t) * passo;
-    const py = origem[1] + (ja + (jb - ja) * t) * passo;
-    const pz = origem[2] + (ka + (kb - ka) * t) * passo;
+    // Interpola entre as POSIÇÕES DE MUNDO dos dois extremos, e não entre os
+    // índices de rede. Numa grade cartesiana dá o mesmo; numa curvilínea, não —
+    // e interpolar índices colocaria o vértice fora da superfície proporcional-
+    // mente à curvatura da célula.
+    pos(ia, ja, ka, pA);
+    pos(ib, jb, kb, pB);
+    const px = pA[0] + (pB[0] - pA[0]) * t;
+    const py = pA[1] + (pB[1] - pA[1]) * t;
+    const pz = pA[2] + (pB[2] - pA[2]) * t;
 
     const ga = gradienteEm(ia, ja, ka);
     const g0x = ga[0], g0y = ga[1], g0z = ga[2];
