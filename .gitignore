@@ -32,3 +32,6 @@ Desktop.ini
 .idea/
 *.swp
 .claude/
+
+# Capturas de tela de desenvolvimento (endpoint /__captura no vite.config.js).
+capturas/

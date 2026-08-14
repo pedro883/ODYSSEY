@@ -474,6 +474,23 @@ export class ShipController {
     camera.lookAt(_cameraLook);
   }
 
+  /**
+   * Cola a câmera na posição de perseguição AGORA, sem amortecimento.
+   *
+   * Existe para os teletransportes (a chegada de um salto interestelar). O
+   * amortecimento da `updateCamera` é o que dá peso à câmera em voo, e é
+   * exatamente o que estraga uma troca de sistema: a câmera parte de onde
+   * estava no sistema ANTERIOR e viaja até a nova posição ao longo de quase um
+   * segundo, atravessando o espaço numa cambalhota — que é como o jogador
+   * descreve o efeito, e ele tem razão.
+   *
+   * `dt` infinito zera o termo exponencial e o `lerp` vai direto ao destino, o
+   * que mantém uma implementação só do enquadramento.
+   */
+  assentarCamera(camera) {
+    this.updateCamera(camera, Infinity);
+  }
+
   dispose() {
     window.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('keyup', this._onKeyUp);

@@ -205,7 +205,15 @@ export class QuadTreeNode {
    */
   invalidar(dirCentro, raioAngular) {
     // `size` 1 cobre uma face inteira (~90° = 1,57 rad), daí o fator ~1,6.
-    const alcance = raioAngular + this.size * 1.6;
+    //
+    // A célula extra é o ANEL DE PADDING: o worker amostra um anel além da
+    // borda de cada chunk para que as normais fechem na costura com o vizinho
+    // (ver `buildChunk`). Um chunk cujo corpo não encosta na escavação mas cujo
+    // padding sim teria as normais da borda calculadas com o relevo antigo — e
+    // sobraria um vinco de iluminação exatamente na emenda, que é o tipo de
+    // defeito que se nota mais do que o buraco em si.
+    const celula = this.size / this.planet.config.lod.chunkRes;
+    const alcance = raioAngular + (this.size + celula) * 1.6;
     if (this.centerDir.dot(dirCentro) < Math.cos(Math.min(Math.PI, alcance))) return 0;
 
     let total = 0;

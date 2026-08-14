@@ -175,6 +175,54 @@ export class CampoDeEdicoes {
   }
 
   /**
+   * Quanto este ponto foi MEXIDO por mão humana, em [0,1].
+   *
+   * Serve à cor do terreno, não à altura. A regra "encosta íngreme mostra rocha
+   * exposta" é boa para relevo natural e péssima para uma vala: o declive de um
+   * buraco recém-cavado satura o medidor, e o interior inteiro era pintado com
+   * a paleta de rocha — num mundo glacial, isso significa passar de areia quase
+   * branca (228,239,255) para quase preto (7,5,4) em dois metros, com borda
+   * dura. Era exatamente o "glitch de textura" relatado.
+   *
+   * Terra remexida é o MESMO material de antes, solto; não é leito rochoso
+   * aflorando. Com esta intensidade, `colorAt` amolece o declive que usa para
+   * escolher a cor — e só para isso, nunca para a geometria.
+   */
+  intensidadeEm(x, y, z) {
+    let maior = 0;
+    const lista = this.lista;
+    for (let i = 0; i < lista.length; i++) {
+      const e = lista[i];
+      const cos = x * e.x + y * e.y + z * e.z;
+      if (cos <= e._cos) continue;
+      const dx = x - e.x, dy = y - e.y, dz = z - e.z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) * this.raioDoPlaneta;
+
+      // -------------------------------------------------------------------
+      // MÁSCARA DE "FOI MEXIDO", NÃO O PESO DO DESLOCAMENTO.
+      //
+      // Usar o peso da própria edição parece natural e falha no lugar exato
+      // onde importa: no domo do `SOMAR`, o peso é MÍNIMO na borda — e a borda
+      // é justamente onde a parede do buraco fica mais íngreme. O resultado
+      // media 7,5,5 (preto) no anel do meio da cratera enquanto o fundo já
+      // estava certo.
+      //
+      // A curva de platô responde a outra pergunta — "esta terra foi
+      // revolvida?" — e responde 'sim' em quase todo o raio. É a pergunta
+      // certa para escolher cor.
+      //
+      // O fator 1,3 estende a máscara além do raio da edição: a escavação
+      // levanta o declive um pouco depois de onde ela para de mexer na altura,
+      // e sem a folga sobrava um anel escuro contornando o buraco.
+      // -------------------------------------------------------------------
+      const w = peso(dist * e._invR * (1 / 1.3), EDICAO.NIVELAR);
+      if (w > maior) maior = w;
+      if (maior >= 1) return 1;
+    }
+    return maior;
+  }
+
+  /**
    * Sublista das edições que podem tocar uma calota.
    *
    * Chamado UMA vez por chunk, no worker, e o resultado alimenta o laço de

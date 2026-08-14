@@ -62,6 +62,7 @@
         <div class="row"><span>PLANETA</span><b id="hud-planet">—</b></div>
         <div class="row"><span>CLASSE</span><b id="hud-class">—</b></div>
         <div class="row"><span>BIOMA</span><b id="hud-biome">—</b></div>
+        <div class="row"><span>CLIMA</span><b id="hud-clima">—</b></div>
         <div class="row"><span>FAUNA</span><b id="hud-fauna">—</b></div>
         <div class="row"><span>LAT</span><b id="hud-lat">0.0°</b></div>
         <div class="row"><span>LON</span><b id="hud-lon">0.0°</b></div>
@@ -142,6 +143,26 @@
       <!-- Prompt de interação contextual -->
       <div id="prompt" class="hidden"></div>
 
+      <!--
+        ================= Chat =================
+
+        Dois alcances: SISTEMA (só quem está no mesmo canal) e GLOBAL (a sala
+        inteira). O histórico fica sempre visível, esmaecido; `Enter` abre a
+        linha de digitação e `Tab` alterna o alcance.
+
+        Fora do #hud e com `pointer-events` só na caixa de texto: precisa
+        continuar acessível com o painel aberto e sumir junto do resto no mapa
+        galáctico, que é o que a classe do <body> resolve.
+      -->
+      <div id="chat">
+        <ul id="chat-log"></ul>
+        <form id="chat-form" class="hidden">
+          <span id="chat-escopo" class="local">SISTEMA</span>
+          <input id="chat-input" type="text" maxlength="200" autocomplete="off"
+                 placeholder="mensagem — Tab troca o alcance, Esc cancela" />
+        </form>
+      </div>
+
       <!-- Avisos e descobertas -->
       <div id="hud-banner"></div>
       <div id="discovery" class="hidden">
@@ -150,6 +171,43 @@
         <div class="disc-sub" id="disc-sub">—</div>
         <div class="disc-units" id="disc-units">+0 unidades</div>
       </div>
+    </div>
+
+    <!--
+      ================= Mapa galáctico (N) =================
+
+      Só interface: as estrelas são desenhadas no canvas WebGL, numa cena
+      própria. O que vive aqui é o texto — que em DOM é nítido, selecionável e
+      de graça, e dentro do WebGL exigiria atlas de fontes.
+    -->
+    <div id="mapa" class="hidden">
+      <header class="mapa-topo">
+        <div><em>GALÁXIA</em><b id="mapa-galaxia">—</b></div>
+        <div><em>SISTEMAS VISITADOS</em><b id="mapa-visitados">0</b></div>
+        <div><em>ALCANCE</em><b id="mapa-alcance">0</b><i>al</i></div>
+        <div><em>ESTRELAS À VISTA</em><b id="mapa-estrelas">0</b></div>
+      </header>
+
+      <aside class="mapa-ficha hidden" id="mapa-ficha">
+        <div class="ficha-tag" id="ficha-tag">SISTEMA</div>
+        <h2 id="ficha-nome">—</h2>
+        <div class="ficha-endereco" id="ficha-endereco">—</div>
+        <dl>
+          <div><dt>Classe</dt><dd id="ficha-classe">—</dd></div>
+          <div><dt>Planetas</dt><dd id="ficha-planetas">—</dd></div>
+          <div><dt>Distância</dt><dd id="ficha-distancia">—</dd></div>
+          <div><dt>Descoberto por</dt><dd id="ficha-descobridor">—</dd></div>
+        </dl>
+        <div class="ficha-acao" id="ficha-acao">—</div>
+      </aside>
+
+      <footer class="mapa-rodape">
+        <kbd>WASD</kbd> voar <kbd>R</kbd><kbd>Q</kbd> subir/descer
+        <kbd>Botão esq.</kbd> girar <kbd>dir.</kbd> arrastar <kbd>Roda</kbd> aproximar
+        <kbd>Duplo clique</kbd>/<kbd>Enter</kbd> saltar
+        <kbd>C</kbd> centrar em você <kbd>F</kbd> no destino
+        <kbd>[</kbd><kbd>]</kbd> galáxia <kbd>N</kbd> fechar
+      </footer>
     </div>
 
     <!--

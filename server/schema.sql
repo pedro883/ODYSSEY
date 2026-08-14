@@ -47,6 +47,11 @@ CREATE TABLE IF NOT EXISTS progresso (
   -- junções para reconstruir o mesmo objeto que o cliente já manda pronto.
   inventario  JSON         NULL,
   descobertas JSON         NULL,
+  -- Onde a pessoa parou: corpo, modo (nave/a pé), posição RELATIVA AO CENTRO
+  -- do planeta, orientação da nave e direção do olhar. Coordenada de mundo não
+  -- serviria: a origem flutuante desloca a cena inteira conforme se anda, então
+  -- o mesmo número significa lugares diferentes em duas sessões.
+  posicao     JSON         NULL,
   atualizado  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (conta_id, seed),
   CONSTRAINT fk_progresso_conta FOREIGN KEY (conta_id) REFERENCES conta (id) ON DELETE CASCADE
@@ -136,6 +141,35 @@ CREATE TABLE IF NOT EXISTS terreno (
   quando  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (seed, planeta, id),
   KEY idx_terreno_universo (seed)
+) ENGINE=InnoDB;
+
+-- -----------------------------------------------------------------------------
+-- Descobertas de sistemas — quem chegou primeiro
+--
+-- A ÚNICA tabela que não é por universo. As outras guardam mutações de um
+-- mundo gerado por um seed; esta guarda um fato sobre a GALÁXIA, que é a mesma
+-- para todas as salas: o endereço de um sistema significa o mesmo lugar em
+-- qualquer partida, então quem o descobriu também.
+--
+-- A chave primária é o endereço, e é ela que implementa a regra inteira: a
+-- descoberta é de quem chegou primeiro, e um `INSERT IGNORE` faz o próprio
+-- banco recusar o segundo sem precisar de consulta, trava ou comparação de
+-- horário no servidor.
+--
+-- `nome` é derivável do endereço (ver `nomeDoSistema` em `shared/galaxy.js`) e
+-- está aqui de propósito: sem ele, ler o catálogo exigiria reimplementar o
+-- gerador de nomes em SQL ou em qualquer ferramenta que consulte a tabela.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS descoberta (
+  endereco    CHAR(19)     NOT NULL,
+  nome        VARCHAR(48)  NOT NULL,
+  descobridor VARCHAR(24)  NOT NULL,
+  -- Nulo quando quem descobriu estava sem conta: o crédito é do nome que ele
+  -- usou, e continua válido mesmo sem ninguém para reivindicá-lo.
+  conta_id    INT UNSIGNED NULL,
+  quando      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (endereco),
+  KEY idx_descoberta_conta (conta_id)
 ) ENGINE=InnoDB;
 
 -- -----------------------------------------------------------------------------

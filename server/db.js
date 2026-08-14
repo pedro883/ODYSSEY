@@ -124,7 +124,7 @@ export class Banco {
   async carregarProgresso(contaId, seed) {
     if (!this.disponivel) return null;
     const [linhas] = await this.pool.query(
-      'SELECT unidades, inventario, descobertas FROM progresso WHERE conta_id = ? AND seed = ?',
+      'SELECT unidades, inventario, descobertas, posicao FROM progresso WHERE conta_id = ? AND seed = ?',
       [contaId, seed]
     );
     if (linhas.length === 0) return null;
@@ -139,26 +139,94 @@ export class Banco {
       unidades: linha.unidades,
       inventario: comoObjeto(linha.inventario),
       descobertas: comoObjeto(linha.descobertas),
+      posicao: comoObjeto(linha.posicao),
+    };
+  }
+
+  /**
+   * O progresso mais recente da conta, de qualquer sistema.
+   *
+   * A tabela é (conta, seed): uma linha por sistema visitado. Ao entrar, o
+   * jogador quer voltar para ONDE PAROU, e não para o sistema de entrada do
+   * servidor — que pode ser um lugar onde ele nunca esteve. Como o estado
+   * guardado já carrega o campo `sistema`, basta devolver a linha mais recente
+   * e deixar o cliente reconstruir aquele universo.
+   */
+  async carregarProgressoMaisRecente(contaId) {
+    if (!this.disponivel) return null;
+    const [linhas] = await this.pool.query(
+      `SELECT unidades, inventario, descobertas, posicao FROM progresso
+        WHERE conta_id = ? ORDER BY atualizado DESC LIMIT 1`,
+      [contaId]
+    );
+    if (linhas.length === 0) return null;
+
+    const linha = linhas[0];
+    const comoObjeto = (valor) =>
+      valor == null ? null : typeof valor === 'string' ? JSON.parse(valor) : valor;
+
+    return {
+      unidades: linha.unidades,
+      inventario: comoObjeto(linha.inventario),
+      descobertas: comoObjeto(linha.descobertas),
+      posicao: comoObjeto(linha.posicao),
     };
   }
 
   async salvarProgresso(contaId, seed, progresso) {
     if (!this.disponivel) return;
     await this.pool.query(
-      `INSERT INTO progresso (conta_id, seed, unidades, inventario, descobertas)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO progresso (conta_id, seed, unidades, inventario, descobertas, posicao)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          unidades = VALUES(unidades),
          inventario = VALUES(inventario),
-         descobertas = VALUES(descobertas)`,
+         descobertas = VALUES(descobertas),
+         -- COALESCE e não VALUES(): um cliente que salve sem posição (a foto
+         -- falha se o planeta ativo ainda não existe no boot) não pode apagar
+         -- o ponto onde a pessoa parou na sessão anterior.
+         posicao = COALESCE(VALUES(posicao), posicao)`,
       [
         contaId,
         seed,
         progresso.unidades ?? 0,
         JSON.stringify(progresso.inventario ?? []),
         JSON.stringify(progresso.descobertas ?? {}),
+        progresso.posicao ? JSON.stringify(progresso.posicao) : null,
       ]
     );
+  }
+
+  /* ===================================================================== */
+  /* Descobertas de sistemas                                               */
+  /* ===================================================================== */
+
+  /** Todas as descobertas da galáxia — não filtra por seed. Ver o esquema. */
+  async carregarDescobertas() {
+    if (!this.disponivel) return [];
+    const [linhas] = await this.pool.query(
+      'SELECT endereco, nome, descobridor, quando FROM descoberta'
+    );
+    return linhas;
+  }
+
+  /**
+   * Registra uma descoberta, se ninguém chegou antes.
+   *
+   * `INSERT IGNORE` e não uma checagem prévia: a corrida real aqui é dois
+   * jogadores saltando para o mesmo sistema no mesmo segundo, e um `SELECT`
+   * seguido de `INSERT` decidiria pelo mais rápido a LER, não pelo mais rápido a
+   * chegar. A chave primária resolve isso sem trava.
+   *
+   * @returns {Promise<boolean>} `true` se esta chamada é que fincou a bandeira
+   */
+  async registrarDescoberta(endereco, nome, descobridor, contaId = null) {
+    if (!this.disponivel) return false;
+    const [r] = await this.pool.query(
+      'INSERT IGNORE INTO descoberta (endereco, nome, descobridor, conta_id) VALUES (?, ?, ?, ?)',
+      [endereco, nome, descobridor, contaId]
+    );
+    return r.affectedRows > 0;
   }
 
   /* ===================================================================== */

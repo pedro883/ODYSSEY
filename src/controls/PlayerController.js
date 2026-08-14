@@ -42,6 +42,25 @@ const SETTINGS = {
   eyeHeight: 1.7,
   mouseSensitivity: 0.0022,
   maxPitch: 1.48, // ~85°
+
+  // --- Água ----------------------------------------------------------------
+  /**
+   * Fração da gravidade cancelada com o corpo submerso.
+   *
+   * 1.06 — acima de 1 de propósito. Com exatamente 1 o corpo fica em equilíbrio
+   * neutro e PARA onde estiver, inclusive a dez unidades de profundidade, o que
+   * na prática é voar dentro da água. Com um empuxo um pouco maior que o peso,
+   * soltar os controles faz subir devagar até a superfície e boiar ali.
+   */
+  empuxo: 1.06,
+  /** Quanto a água tira da velocidade de nado (0 = nada, 1 = imóvel). */
+  arrastoAgua: 0.45,
+  /** Amortecimento da velocidade vertical na água — evita ficar quicando. */
+  arrastoVertical: 2.6,
+  /** Empurrão de nado para cima/baixo, por segundo. */
+  impulsoNado: 26,
+  /** Teto da velocidade vertical nadando. */
+  velocidadeSubidaAgua: 6,
 };
 
 export class PlayerController {
@@ -64,6 +83,10 @@ export class PlayerController {
     this.pitch = 0;
 
     this.grounded = false;
+    /** 0 = seco, 1 = cabeça abaixo da linha d'água. */
+    this.submerso = 0;
+    /** Nadando de fato (não apenas com os pés molhados). */
+    this.nadando = false;
     this.jetpackFuel = SETTINGS.jetpackFuel;
     this.jetpackActive = false;
 
@@ -182,17 +205,54 @@ export class PlayerController {
     let radialSpeed = this.velocity.dot(_up);
     _tangential.copy(this.velocity).addScaledVector(_up, -radialSpeed);
 
+    // -----------------------------------------------------------------------
+    // ÁGUA
+    //
+    // `submersao` é o quanto da altura do corpo está abaixo da linha d'água,
+    // em [0,1]. Não é um interruptor: entre andar na praia e nadar existe a
+    // faixa em que a pessoa está com água pela cintura, e tratar isso como
+    // liga/desliga produz o pulo característico de jogo mal-acabado — o
+    // personagem alterna entre correndo e boiando a cada onda.
+    //
+    // O nível do mar é o RAIO do planeta: a elevação do terreno é medida a
+    // partir dele (negativa = fundo submerso), então a superfície da água é a
+    // esfera de raio `config.radius`. É a mesma referência que o oceano usa.
+    // -----------------------------------------------------------------------
+    const naAgua = planet.config.hasWater;
+    const profundidade = naAgua ? planet.config.radius - sample.distance : -1;
+    const submersao = naAgua
+      ? Math.min(1, Math.max(0, (profundidade + SETTINGS.eyeHeight * 0.35) / SETTINGS.eyeHeight))
+      : 0;
+    this.submerso = submersao;
+    this.nadando = submersao > 0.55;
+
     const damping = this.grounded ? SETTINGS.groundDamping : SETTINGS.airDamping;
     const rate = moving ? SETTINGS.acceleration : damping;
-    _tangential.lerp(_wish, 1 - Math.exp(-rate * dt));
+    // A água freia o movimento e limita a velocidade: nadar é mais lento que
+    // correr, e o arrasto é o que dá peso à massa de água em volta.
+    _wish.multiplyScalar(1 - submersao * SETTINGS.arrastoAgua);
+    _tangential.lerp(_wish, 1 - Math.exp(-(rate * (1 - submersao * 0.55)) * dt));
 
-    // --- Movimento radial: gravidade, pulo e jetpack -----------------------
-    radialSpeed -= SETTINGS.gravity * dt;
+    // --- Movimento radial: gravidade, empuxo, pulo e jetpack ----------------
+    // O empuxo cancela a gravidade quando submerso e sobra um pouco: parado, o
+    // corpo sobe devagar até a linha da água e fica boiando ali, que é o
+    // comportamento que se espera ao soltar os controles dentro do mar.
+    const gravidadeEfetiva = SETTINGS.gravity * (1 - submersao * SETTINGS.empuxo);
+    radialSpeed -= gravidadeEfetiva * dt;
+    if (submersao > 0) {
+      // Arrasto vertical: sem ele o corpo oscilaria para sempre em torno da
+      // linha d'água, porque empuxo e gravidade formam um oscilador sem perda.
+      radialSpeed *= Math.exp(-SETTINGS.arrastoVertical * submersao * dt);
+    }
 
     const wantsUp = k.has('Space');
     this.jetpackActive = false;
 
-    if (wantsUp && this.grounded) {
+    if (wantsUp && this.nadando) {
+      // Nadar para cima: subida constante, sem gastar o jetpack. Chegando à
+      // superfície o empuxo já segura; isto é para vencer a coluna de água.
+      radialSpeed = Math.min(SETTINGS.velocidadeSubidaAgua, radialSpeed + SETTINGS.impulsoNado * dt);
+    } else if (wantsUp && this.grounded) {
       radialSpeed = SETTINGS.jumpImpulse;
       this.grounded = false;
     } else if (wantsUp && this.jetpackFuel > 0) {
@@ -202,6 +262,11 @@ export class PlayerController {
         SETTINGS.jetpackMaxClimb,
         radialSpeed + SETTINGS.jetpackForce * dt
       );
+    }
+
+    // Mergulhar: agachar dentro d'água empurra para baixo.
+    if (this.nadando && (k.has('ControlLeft') || k.has('KeyC'))) {
+      radialSpeed = Math.max(-SETTINGS.velocidadeSubidaAgua, radialSpeed - SETTINGS.impulsoNado * dt);
     }
 
     if (this.grounded && !this.jetpackActive) {

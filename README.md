@@ -64,6 +64,7 @@ simplesmente não aparece. Créditos em `public/models/CREDITS.md`.
 | **Terreno sob a base** | O relevo se aplaina sozinho embaixo do que se constrói, e o platô é recalculado por cada cliente a partir das peças — nada disso trafega |
 | **Equipamento** | Barra de três ferramentas (multiferramenta, construtor, terraformador) com mãos e arma em primeira pessoa, balanço de passo, coice ao usar e gesto de saque na troca |
 | **Painel (Tab)** | Inventário em grade com ícones próprios de cada recurso e catálogo de construção por categoria, com miniatura 3D gerada da própria peça e custo em "tenho/preciso" |
+| **Voltar onde parou** | A sessão seguinte começa no ponto exato em que a anterior terminou — corpo, posição, modo (nave ou a pé), olhar e a nave estacionada onde ficou |
 
 ### Números medidos
 
@@ -927,6 +928,41 @@ pousa em `y = 0.300` — exatamente o topo da laje —, para a 0,15 da face inte
 da parede (o próprio raio do corpo) e atravessa a porta sem obstáculo. Demolir
 devolveu 15 de ferrite e apagou a linha do banco.
 
+### 3.13.1 Voltar onde parou
+
+O ponto em que a pessoa saiu entra no mesmo registro de progresso (§3.12) e é
+restaurado ao entrar com a conta.
+
+**Coordenadas relativas ao planeta, nunca de mundo** — pelo mesmo motivo que a
+rede usa espaço local (§3.11): a origem flutuante desloca a cena inteira conforme
+o jogador anda, então a mesma coordenada de cena significa lugares diferentes em
+duas sessões. O centro do planeta é o único referencial que sobrevive a um
+recarregamento, e ele próprio deriva do seed.
+
+**A nave vai junto, sempre.** Guardar só o jogador funciona enquanto ele estiver
+pilotando. Quem sai do jogo a pé, a duzentos metros da nave, voltaria com ela no
+ponto inicial do sistema — ou seja, a pé, sem transporte, num planeta qualquer.
+A nave estacionada é parte de onde você parou. O olhar também entra, para não
+devolver a pessoa girada para um lado aleatório.
+
+Duas sutilezas que o código registra:
+
+- `?spawn=` manda mais que o save. Quem abre com `?spawn=orbita` quer ver a
+  órbita, não voltar para onde parou — e sem essa precedência o cenário de teste
+  sobrescreveria a posição alguns frames depois, com um salto visível.
+- No banco, `posicao = COALESCE(VALUES(posicao), posicao)`. Um cliente que grave
+  sem posição não pode apagar o ponto da sessão anterior.
+
+Se o ponto salvo estiver em outro corpo, a malha de lá ainda não existe quando o
+jogo começa — e isso é seguro: colisão e altitude usam o amostrador analítico,
+que responde certo mesmo onde nenhum chunk chegou. O terreno aparece em volta nos
+segundos seguintes.
+
+Verificado de ponta a ponta: jogador a pé em **Fenivex VI** (corpo 2, não o
+inicial), **servidor reiniciado**, e ao entrar de novo o desvio foi de `0.00`
+tanto para o jogador quanto para a nave, com altitude 0 — de pé no chão, sem
+queda.
+
 ### 3.14 Terreno deformável
 
 O terraformador (`3`) cava com o botão esquerdo e eleva com o direito.
@@ -987,9 +1023,43 @@ O sintoma era exato e confuso: a cratera existia para a colisão e para a altitu
 cair num buraco invisível. Uma segunda varredura depois que a fila esvazia
 resolve sem precisar de confirmação por chunk.
 
-Verificado: perfil atravessando uma cratera restaurada do banco, a cada 4
-unidades — `23,4 · 23,4 · 19,5 · 14,9 · 19,5 · 23,4 · 22,9`. Simétrico e suave,
-com o fundo 8,5 abaixo do terreno original.
+**Reconstruir agrupado, não por frame.** Segurando o botão, a mesma escavação é
+reaplicada a cada frame — 60 por segundo. Invalidar em cada uma descarta ~25
+chunks e os repede, e o pool processa ~12 por vez: a fila crescia mais rápido do
+que drenava e *nenhum* chunk chegava a ser entregue antes de ser descartado de
+novo. Na tela, o terreno piscava, aparecia em retalhos ou simplesmente não
+mudava enquanto se cavava — e como a colisão lê o amostrador da main thread, dava
+para afundar num chão que continuava desenhado. Agora há dois relógios: um curto
+(0,18 s) que reinicia a cada mudança e um teto (0,75 s) que dispara mesmo com a
+escavação em andamento. Uma cavada de dois segundos custa duas ou três
+reconstruções em vez de cento e vinte. Medido: fila de 274 pedidos antes,
+**0 durante a escavação**.
+
+**Terra remexida não é paredão de rocha.** O declive governa duas escolhas de cor
+— rocha exposta em encosta íngreme e ausência de neve em parede vertical — e as
+duas estão certas para relevo natural e erradas para uma vala. O declive de um
+buraco recém-cavado satura o medidor, e o interior saía pintado de leito
+rochoso: de `228,239,255` (areia quase branca) para `7,5,4` (quase preto) em dois
+metros, com borda dura. Era o "glitch de textura".
+
+A correção amolece o declive **só para efeito de cor**, na proporção de quanto
+aquele ponto foi mexido; geometria, colisão e bioma continuam com o declive real.
+A máscara usa a curva de platô e não o peso da própria edição — no domo do
+`SOMAR` o peso é mínimo na borda, que é justamente onde a parede fica mais
+íngreme, e a primeira tentativa acertou o fundo da cratera deixando um anel preto
+no meio dela. Com folga de 30% além do raio, some também o contorno escuro.
+
+Verificado — perfil atravessando uma cratera, a cada 2 unidades:
+
+| | −12 m | −8 m | −4 m | 0 | 4 m | 8 m | 12 m |
+|---|---|---|---|---|---|---|---|
+| elevação | 23,2 | 22,6 | 17,9 | **12,5** | 16,8 | 20,0 | 19,3 |
+| cor (R) | 228 | 220 | 222 | 231 | 228 | 227 | 232 |
+
+A elevação desenha a cratera; a cor atravessa sem salto. E uma cratera restaurada
+do banco num cliente novo mede
+`23,4 · 23,4 · 19,5 · 14,9 · 19,5 · 23,4 · 22,9` — simétrica, com o fundo 8,5
+abaixo do terreno original.
 
 ### 3.15 Equipamento e primeira pessoa
 

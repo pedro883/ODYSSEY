@@ -94,6 +94,25 @@ export class FloatingOrigin {
   }
 
   /**
+   * Esquece tudo que estava inscrito, mantendo o deslocamento acumulado.
+   *
+   * Serve ao salto interestelar, que destrói os planetas e cria outros: sem
+   * isto a lista guardaria os `group` do sistema anterior e o rebase seguinte
+   * empurraria objetos já removidos da cena — invisível, mas o vazamento cresce
+   * a cada salto.
+   *
+   * O `origin` NÃO é zerado de propósito. Ele é o deslocamento acumulado da
+   * cena em relação à origem verdadeira, e continua valendo: quem recomeça é o
+   * conteúdo do universo, não o referencial em que ele é desenhado.
+   */
+  limpar() {
+    this.objects.length = 0;
+    this.vectors.length = 0;
+    this.handlers.length = 0;
+    return this;
+  }
+
+  /**
    * Recentraliza se a câmera passou do limiar.
    *
    * @param {THREE.Camera} camera

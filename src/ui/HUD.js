@@ -43,6 +43,7 @@ export class HUD {
       planet: el('hud-planet'),
       class: el('hud-class'),
       biome: el('hud-biome'),
+      clima: el('hud-clima'),
       fauna: el('hud-fauna'),
       lat: el('hud-lat'),
       lon: el('hud-lon'),
@@ -109,6 +110,43 @@ export class HUD {
       assinatura: '',
     };
 
+    this.mapa = {
+      root: el('mapa'),
+      galaxia: el('mapa-galaxia'),
+      visitados: el('mapa-visitados'),
+      alcance: el('mapa-alcance'),
+      estrelas: el('mapa-estrelas'),
+      ficha: el('mapa-ficha'),
+      tag: el('ficha-tag'),
+      nome: el('ficha-nome'),
+      endereco: el('ficha-endereco'),
+      classe: el('ficha-classe'),
+      planetas: el('ficha-planetas'),
+      distancia: el('ficha-distancia'),
+      descobridor: el('ficha-descobridor'),
+      acao: el('ficha-acao'),
+      assinatura: '',
+    };
+
+    /**
+     * Chat.
+     *
+     * `alcance` é 'local' (só quem está neste sistema) ou 'global' (a sala
+     * inteira). Guardado aqui e não no servidor: é preferência de quem digita,
+     * e o alcance viaja em cada mensagem.
+     */
+    this.chat = {
+      root: el('chat'),
+      log: el('chat-log'),
+      form: el('chat-form'),
+      input: el('chat-input'),
+      escopo: el('chat-escopo'),
+      alcance: 'local',
+      aberto: false,
+      /** Linhas na tela, para esmaecer as antigas. @type {{no:HTMLElement, idade:number}[]} */
+      linhas: [],
+    };
+
     this._accumulator = 0;
     this._bannerTimer = 0;
     this._discoveryTimer = 0;
@@ -167,6 +205,7 @@ export class HUD {
     this._set('planet', data.planetName);
     this._set('class', data.planetClass);
     this._set('biome', data.biome);
+    this._set('clima', data.clima ?? '—');
     // Fora do alcance da fauna o campo mostra "—" em vez de "0": zero sugere um
     // mundo estéril, quando a verdade é que ainda estamos alto demais para ver.
     this._set('fauna', data.faunaAtiva ? `${data.fauna} · ${data.faunaEspecies}` : '—');
@@ -331,6 +370,176 @@ export class HUD {
       this.hotbar.chips[estado.atual]?.classList.add('sel');
       this.hotbar.atual = estado.atual;
     }
+  }
+
+  /* ===================================================================== */
+  /* Chat                                                                  */
+  /* ===================================================================== */
+
+  /**
+   * Liga a caixa de digitação.
+   *
+   * @param {(texto:string, alcance:string) => boolean} aoEnviar devolve `false`
+   *   quando não há sala — e aí a linha vira um aviso local em vez de sumir.
+   */
+  ligarChat(aoEnviar) {
+    const c = this.chat;
+
+    c.form.addEventListener('submit', (evento) => {
+      evento.preventDefault();
+      const texto = c.input.value.trim();
+      c.input.value = '';
+      if (texto) {
+        // O eco local é do SERVIDOR, não daqui: ele carimba o autor e a hora, e
+        // é o mesmo pacote que chega para os outros. Imprimir localmente
+        // primeiro faria a própria mensagem aparecer duas vezes — ou, pior,
+        // aparecer mesmo quando o servidor a recusou.
+        if (!aoEnviar(texto, c.alcance)) {
+          this.escreverNoChat({ sistema: true, texto: 'sem conexão com a sala' });
+        }
+      }
+      this.fecharChat();
+    });
+
+    c.input.addEventListener('keydown', (evento) => {
+      // As teclas do chat NÃO podem vazar para o jogo: sem isto, digitar
+      // "wasd" faz o personagem andar e "1" troca de ferramenta.
+      evento.stopPropagation();
+      if (evento.code === 'Escape') {
+        c.input.value = '';
+        this.fecharChat();
+      } else if (evento.code === 'Tab') {
+        evento.preventDefault();
+        this.alternarAlcanceDoChat();
+      }
+    });
+  }
+
+  abrirChat() {
+    const c = this.chat;
+    c.aberto = true;
+    c.form.classList.remove('hidden');
+    c.input.focus();
+  }
+
+  fecharChat() {
+    const c = this.chat;
+    c.aberto = false;
+    c.form.classList.add('hidden');
+    c.input.blur();
+  }
+
+  alternarAlcanceDoChat() {
+    const c = this.chat;
+    c.alcance = c.alcance === 'local' ? 'global' : 'local';
+    c.escopo.textContent = c.alcance === 'global' ? 'GLOBAL' : 'SISTEMA';
+    c.escopo.className = c.alcance;
+  }
+
+  /**
+   * Acrescenta uma linha ao histórico.
+   * @param {{de?:string, texto:string, escopo?:string, sistema?:boolean}} linha
+   */
+  escreverNoChat(linha) {
+    const c = this.chat;
+    const no = document.createElement('li');
+
+    if (linha.sistema) {
+      no.className = 'sistema-info';
+      no.textContent = linha.texto;
+    } else {
+      no.className = linha.escopo === 'global' ? 'global' : '';
+      const autor = document.createElement('b');
+      autor.textContent = linha.escopo === 'global' ? `[G] ${linha.de}: ` : `${linha.de}: `;
+      no.append(autor, document.createTextNode(linha.texto));
+    }
+
+    c.log.append(no);
+    c.linhas.push({ no, idade: 0 });
+
+    // Teto de 12 linhas: o histórico é um rodapé de conversa, não um registro.
+    while (c.linhas.length > 12) c.linhas.shift().no.remove();
+  }
+
+  /** Esmaece o que já foi lido. Chamado pelo laço do jogo. */
+  atualizarChat(dt) {
+    for (const linha of this.chat.linhas) {
+      linha.idade += dt;
+      if (linha.idade > 14 && !linha.no.classList.contains('velha')) {
+        linha.no.classList.add('velha');
+      }
+    }
+  }
+
+  /* ===================================================================== */
+  /* Mapa galáctico                                                        */
+  /* ===================================================================== */
+
+  /**
+   * Abre o mapa e esconde TODO o HUD de gameplay.
+   *
+   * Os dois juntos seriam ruído puro: velocidade, altitude, bioma e carga não
+   * querem dizer nada enquanto se olha para uma galáxia, e as caixas do HUD
+   * tapariam justamente os cantos onde a ficha do sistema precisa caber.
+   *
+   * A classe vai no `<body>`, e não no `#hud`, porque parte do gameplay mora
+   * FORA do HUD: os marcadores de planeta e da nave são um contêiner irmão, e
+   * ficavam flutuando sobre as estrelas apontando corpos de um sistema que a
+   * tela nem está mostrando. Uma regra num ancestral comum cobre os dois sem
+   * cada elemento novo ter de lembrar de se esconder.
+   */
+  mostrarMapa(aberto) {
+    this.mapa.root.classList.toggle('hidden', !aberto);
+    document.body.classList.toggle('modo-mapa', aberto);
+  }
+
+  atualizarMapa(estado) {
+    const m = this.mapa;
+    m.galaxia.textContent = estado.galaxia;
+    m.visitados.textContent = String(estado.visitados);
+    m.alcance.textContent = String(estado.alcance);
+    m.estrelas.textContent = estado.estrelas.toLocaleString('pt-BR');
+
+    const f = estado.ficha;
+    if (!f) {
+      m.ficha.classList.add('hidden');
+      return;
+    }
+    m.ficha.classList.remove('hidden');
+
+    // Assinatura: o mapa roda a 60 Hz e a ficha só muda quando o cursor troca
+    // de estrela. Sem ela seriam nove escritas de DOM por frame para reescrever
+    // exatamente o mesmo texto.
+    const assinatura = `${f.endereco}|${f.alcancavel}|${f.atual}|${f.visitado}|${f.descobridor ?? ''}`;
+    if (assinatura === m.assinatura) return;
+    m.assinatura = assinatura;
+
+    m.nome.textContent = f.nome;
+    m.endereco.textContent = f.endereco;
+    m.classe.textContent = `${f.classe} · ${nomeDaClasse(f.classe)}`;
+    m.planetas.textContent = String(f.planetas);
+    m.distancia.textContent = f.atual ? '—' : `${f.distancia.toFixed(2)} al`;
+    // Traço e não "ninguém": o campo vazio já diz que está sem dono, e o
+    // convite ("seja o primeiro") vive na etiqueta logo acima, onde há espaço.
+    m.descobridor.textContent = f.descobridor ?? '—';
+    m.descobridor.classList.toggle('inedito', !f.descobridor);
+
+    // A etiqueta responde à pergunta na ordem em que ela importa: onde estou,
+    // quem chegou aqui antes, e — se ninguém chegou — que isto é inédito.
+    m.tag.textContent = f.atual
+      ? 'VOCÊ ESTÁ AQUI'
+      : f.descobridor
+        ? `DESCOBERTO POR ${f.descobridor.toUpperCase()}`
+        : 'NÃO EXPLORADO';
+    m.tag.className = `ficha-tag${f.atual ? ' atual' : f.descobridor ? ' visitado' : ' inedito'}`;
+
+    const acao = f.atual
+      ? 'sistema atual'
+      : f.alcancavel
+        ? 'ENTER ou duplo clique para saltar'
+        : 'fora do alcance do hiperimpulsor';
+    m.acao.textContent = acao;
+    m.acao.classList.toggle('bloqueado', !f.atual && !f.alcancavel);
   }
 
   /* ===================================================================== */
@@ -583,6 +792,14 @@ function escapar(texto) {
   return String(texto).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   })[c]);
+}
+
+/** Como o jogador lê a classe espectral — a letra sozinha não diz nada. */
+function nomeDaClasse(letra) {
+  return {
+    O: 'azul, hipergigante', B: 'azul-branca', A: 'branca', F: 'branco-amarela',
+    G: 'amarela', K: 'laranja', M: 'anã vermelha',
+  }[letra] ?? 'desconhecida';
 }
 
 function formatCount(value) {

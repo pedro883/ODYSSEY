@@ -28,6 +28,7 @@ const _up = new THREE.Vector3();
 const _skyColor = new THREE.Color();
 const _groundColor = new THREE.Color();
 const _nightColor = new THREE.Color(0x02040a);
+const _waterColor = new THREE.Color();
 /** Cor do sol rasante: o que sobra depois que a atmosfera come o azul. */
 const _sunsetColor = new THREE.Color(0xff8a3d);
 const _sunBase = new THREE.Color();
@@ -57,6 +58,25 @@ export class GameState {
     // a linear e é o que melhor imita perspectiva aérea real.
     this.fog = new THREE.FogExp2(0x000000, 0);
     engine.scene.fog = this.fog;
+
+    /**
+     * Névoa adicional pedida pelo clima (0 = tempo limpo).
+     *
+     * Mora aqui, e não em `Weather`, porque a densidade final é uma conta só —
+     * atmosfera, altitude e tempo — e ter dois donos escrevendo no mesmo
+     * `fog.density` em pontos diferentes do frame é a receita para um deles
+     * sobrescrever o outro conforme a ordem de atualização mudar.
+     */
+    this.nevoaExtra = 0;
+
+    /**
+     * Quanto do jogador está debaixo d'água (0..1).
+     *
+     * A névoa é o que vende o mergulho: sem ela dá para enxergar o fundo do mar
+     * inteiro de dentro dele, e a água vira um filtro de cor em vez de um meio
+     * denso. Escrito de fora, por quem sabe onde o jogador está.
+     */
+    this.submerso = 0;
 
     // Uma hemisférica basta: a direcional do sol já faz o trabalho pesado, e
     // esta preenche as sombras com a cor do céu (o "bounce" do ambiente).
@@ -124,7 +144,23 @@ export class GameState {
     // um chunk de LOD grosseiro termina.
     // ---------------------------------------------------------------------
     const fogScale = this.engine.aerialEnabled ? 0.12 : 1;
-    this.fog.density = Math.pow(atmo, 3) * 0.00055 * planet.config.atmosphere.density * fogScale;
+    // `1 + nevoaExtra` é o tempo fechando: chuva, neve e areia em suspensão
+    // encurtam o alcance da vista, e essa é a METADE do efeito de clima que o
+    // jogador de fato sente — a cortina de gotas convence muito menos do que a
+    // paisagem sumindo atrás dela. Escrito de fora, por `Weather`.
+    this.fog.density =
+      Math.pow(atmo, 3) * 0.00055 * planet.config.atmosphere.density * fogScale *
+      (1 + this.nevoaExtra);
+
+    // --- Debaixo d'água -----------------------------------------------------
+    // A água é um meio MUITO mais denso que o ar: a visibilidade cai para
+    // dezenas de unidades e tudo puxa para o azul-esverdeado do fundo. Aplicado
+    // por último, por cima da conta atmosférica, porque submerso o ar não conta.
+    if (this.submerso > 0.01) {
+      _waterColor.fromArray(planet.config.palette.deepOcean);
+      this.fog.color.lerp(_waterColor, this.submerso * 0.92);
+      this.fog.density = THREE.MathUtils.lerp(this.fog.density, 0.028, this.submerso);
+    }
 
     // --- Luz ambiente -------------------------------------------------------
     _groundColor.fromArray(planet.config.palette.dry);
