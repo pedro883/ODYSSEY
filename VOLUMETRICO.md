@@ -79,9 +79,30 @@ toda divergência é defeito do mesher, não mudança de conteúdo.
       Verificado: sem cavernas a sonda acha o chão em 400 de 400 direções com
       erro máximo de 0,0002 unidade, isto é, reproduz a colisão de hoje.
 
-- [ ] **4b. Trocar `sampleAt` pelos resultados da sonda**
-      Afeta nave, jogador, fauna, projéteis e props. É o passo que mais toca
-      código existente, e o único que pode piorar o jogo se sair errado.
+- [x] **4b. `sampleAt` consulta a sonda**
+      Mudança em UM ponto — `Planet.sampleAt` — em vez de nas oito chamadas
+      espalhadas. Tudo a jusante (altitude, pouso, colisão, fauna, projéteis)
+      passou a funcionar dentro de caverna sem saber que algo mudou.
+
+      **A guarda é o que mantém o custo.** A sonda custa 3,7 µs contra 0,88 µs
+      de uma amostra, e `sampleAt` roda dezenas de vezes por quadro. Mas
+      cavernas só existem ABAIXO da superfície (`margemTeto` garante rocha
+      maciça sob ela), então quem está acima do relevo já tem a resposta certa e
+      não marcha. Só paga quem está de fato dentro de uma caverna.
+
+      Verificado no jogo: de um ponto dentro de uma caverna a 135 unidades de
+      profundidade, `sampleAt` devolve o PISO DA CAVERNA (4290,4) e não a
+      superfície lá fora (4425,6), com altitude de 3,27 unidades acima do piso.
+
+- [x] **6a. Props no caminho volumétrico**
+      `scatterProps` serviu sem adaptação: desde que passou a usar uma grade
+      global de células (a correção dos props que saltavam entre LODs), ele é
+      independente da malha. 5.651 instâncias na superfície, 50 de 56 chunks.
+
+- [ ] **7. Entradas de caverna**
+      **As cavernas existem e são habitáveis, mas ainda não há como CHEGAR nelas
+      pela superfície** — `margemTeto` sela o teto de propósito. Falta escolher
+      regiões onde um túnel sobe até aflorar.
 
 - [ ] **5. Costuras entre níveis de LOD**
       Hoje resolvidas por saia. Em volume, exige algo como transvoxel, ou

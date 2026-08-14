@@ -19,6 +19,26 @@ import { createAtmosphere } from '../shaders/AtmosphereShader.js';
 import { criarOceano } from '../shaders/OceanShader.js';
 import { Clouds } from './Clouds.js';
 import { CampoDeEdicoes } from '../shared/edits.js';
+import { criarCampoDeDensidade } from '../shared/densidade.js';
+import { criarSonda } from '../shared/sonda.js';
+
+/**
+ * Terreno volumétrico (`?volumetrico=1`). Mesmo interruptor do `ChunkManager`.
+ */
+const VOLUMETRICO =
+  typeof location !== 'undefined' &&
+  new URLSearchParams(location.search).get('volumetrico') === '1';
+
+/**
+ * Até onde a sonda procura o chão, em unidades.
+ *
+ * Precisa cobrir a caverna mais funda que o chunk desenha (a casca vai a 90
+ * unidades abaixo da elevação mínima) com folga para o jogador estar caindo.
+ */
+const ALCANCE_SONDA = 260;
+
+/** Direção reaproveitada nas consultas à sonda (ver `sampleAt`). */
+const _dirSonda = [0, 0, 0];
 
 const _tangentA = new THREE.Vector3();
 const _tangentB = new THREE.Vector3();
@@ -76,6 +96,15 @@ export class Planet {
     // altitude da nave, colisão e posicionamento dos nós da quadtree — se as
     // duas implementações divergissem, a nave atravessaria o chão visível.
     this.sampler = createTerrainSampler(this.config, this.edicoes);
+
+    // A sonda responde "onde está o chão" quando o chão pode não ser a
+    // superfície — isto é, dentro de uma caverna. Criada só no modo volumétrico:
+    // no campo de altura a resposta é uma amostra e marchar seria desperdício.
+    // Compartilha o MESMO `sampler`, logo enxerga as escavações do jogador.
+    this.sonda = VOLUMETRICO
+      ? criarSonda(criarCampoDeDensidade(this.config, this.sampler.heightAt))
+      : null;
+
     this.pool = pool;
 
     this.group = new THREE.Group();
@@ -247,6 +276,35 @@ export class Planet {
     sample.elevation = elevation;
     sample.surfaceRadius = this.config.radius + groundElevation;
     sample.altitude = distance - sample.surfaceRadius;
+
+    // -----------------------------------------------------------------------
+    // TERRENO VOLUMÉTRICO: O CHÃO PODE NÃO SER A SUPERFÍCIE.
+    //
+    // Dentro de uma caverna, o chão é o piso dela — dezenas de unidades abaixo
+    // do relevo. Sem isto o jogador entraria na caverna e continuaria sendo
+    // empurrado para a altitude do terreno lá fora, ou seja, atravessaria o teto
+    // de baixo para cima.
+    //
+    // A GUARDA É O QUE MANTÉM O CUSTO. A sonda custa 3,7 µs contra os 0,88 µs
+    // de uma amostra de altura, e `sampleAt` é chamado dezenas de vezes por
+    // quadro (nave, jogador, cada criatura, cada projétil). Mas as cavernas só
+    // existem ABAIXO da superfície — `margemTeto` garante rocha maciça logo
+    // sob ela —, então quem está acima do relevo já tem a resposta certa e não
+    // marcha. Na prática só paga quem está de fato dentro de uma caverna.
+    // -----------------------------------------------------------------------
+    if (this.sonda && sample.altitude < 0) {
+      // A sonda trabalha com um array simples, e não com `Vector3`: ela é
+      // compartilhada com os workers, onde importar a engine inteira seria
+      // desperdício. Passar o `Vector3` direto daria `dir[0] === undefined` e
+      // NaN silencioso em toda a colisão.
+      _dirSonda[0] = local.x; _dirSonda[1] = local.y; _dirSonda[2] = local.z;
+      const chao = this.sonda.chaoAbaixo(_dirSonda, distance, ALCANCE_SONDA);
+      if (chao !== null) {
+        sample.surfaceRadius = chao;
+        sample.altitude = distance - chao;
+      }
+    }
+
     return sample;
   }
 

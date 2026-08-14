@@ -114,7 +114,7 @@ function accumulateFaceNormal(pos, nrm, a, b, c) {
  * terreno anterior à última pá de terra.
  */
 function construirChunkVolumetrico(req, cfg, sampler, campo) {
-  const { id, face, u0, v0, size } = req;
+  const { id, face, u0, v0, size, withProps } = req;
 
   const dirCentro = [0, 0, 0];
   faceDirection(face, u0 + size * 0.5, v0 + size * 0.5, dirCentro);
@@ -184,7 +184,13 @@ function construirChunkVolumetrico(req, cfg, sampler, campo) {
     normals: malha.normals,
     colors: cores,
     indices: malha.indices,
-    props: new Float32Array(0),
+    // `scatterProps` é independente da malha desde que passou a usar uma grade
+    // global de células (é o que fez os props pararem de saltar entre níveis de
+    // LOD), então serve aos dois caminhos sem nenhuma adaptação: ele só precisa
+    // do centro do chunk para devolver posições relativas a ele.
+    props: withProps
+      ? scatterProps(req, cfg, sampler, { cx: centro[0], cy: centro[1], cz: centro[2] })
+      : new Float32Array(0),
     center: centro,
     boundingRadius: Math.sqrt(raioEnv),
     minElev: malha.hMin - cfg.radius,
