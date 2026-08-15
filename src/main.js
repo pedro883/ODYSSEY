@@ -36,7 +36,7 @@ import { PECAS, descreverCusto } from './assets/buildings.js';
 import { RESOURCES } from './shared/props.js';
 import { HUD, toLatLon } from './ui/HUD.js';
 import { assets } from './assets/AssetLibrary.js';
-import { allPreloadPaths, propPaths } from './assets/manifest.js';
+import { allPreloadPaths, propPaths, SHIP_MODEL } from './assets/manifest.js';
 import { windTime } from './shaders/WindShader.js';
 import { cloudQuality } from './world/Clouds.js';
 import { audio } from './audio/AudioEngine.js';
@@ -51,6 +51,7 @@ import { Blaster } from './game/Blaster.js';
 import { EDICAO } from './shared/edits.js';
 import { Sentinelas } from './game/Sentinelas.js';
 import { CanhoesDaNave } from './game/CanhoesDaNave.js';
+import { Piratas } from './game/Piratas.js';
 import { Qualidade } from './game/Qualidade.js';
 import { MenuPausa } from './ui/MenuPausa.js';
 
@@ -326,6 +327,26 @@ const jogadorComoDono = {};
 
 const sentinelas = new Sentinelas(engine.scene, projeteis);
 const canhoes = new CanhoesDaNave(projeteis);
+const piratas = new Piratas(engine.scene, projeteis);
+
+// O casco pirata é o modelo da nave repintado. Buscado de forma preguiçosa: no
+// boot os assets ainda não chegaram, e `corpoDePirata` já cai numa silhueta de
+// primitivas se ele faltar — uma emboscada feia é melhor que uma invisível.
+piratas.pegarModelo = () => assets.getSceneSync(SHIP_MODEL.path);
+
+piratas.aoEmboscar = (quantos, motivo) => {
+  hud.notify(
+    motivo === 'carga' ? `${quantos} PIRATAS · SUA CARGA ATRAIU ATENÇÃO` : `${quantos} PIRATAS EM EMBOSCADA`,
+    3.5
+  );
+  audio.ui(false);
+};
+piratas.aoAbater = () => {
+  // Espólio proporcional ao risco: derrubar um pirata paga melhor que um drone,
+  // porque a emboscada não é opcional e custa escudo de casco.
+  inventory.add('cobalto', 3 + ((Math.random() * 4) | 0));
+  hud.notify('PIRATA ABATIDO · +ESPÓLIO', 1.8);
+};
 
 /**
  * O jogador como ALVO, na mesma forma que a fauna e os drones.
@@ -351,6 +372,7 @@ function montarAlvos() {
   _alvos.length = 0;
   for (const a of activePlanet.fauna.alvos()) _alvos.push(a);
   for (const a of sentinelas.alvos()) _alvos.push(a);
+  for (const a of piratas.alvos()) _alvos.push(a);
 
   // A pé o alvo é o traje; pilotando, o casco — e o raio muda junto, porque
   // acertar uma nave é bem mais fácil que acertar uma pessoa.
@@ -585,6 +607,7 @@ function inscreverNaOrigemFlutuante() {
     .onShift((delta) => {
       projeteis.deslocar(delta);
       sentinelas.deslocar(delta);
+      piratas.deslocar(delta);
     });
 }
 
@@ -1585,6 +1608,8 @@ function saltarPara(sistema) {
       // afora deixaria o jogador perseguido para sempre pelo que fez uma vez.
       sentinelas.limpar();
       projeteis.limpar();
+      piratas.limpar();
+      recemSaltou = true;
       inscreverNaOrigemFlutuante();
       posicionarNaChegada();
 
@@ -1620,6 +1645,9 @@ function saltarPara(sistema) {
 /* ========================================================================== */
 
 let painelAberto = false;
+
+/** Marcado ao chegar de um salto; consumido no quadro seguinte pelos piratas. */
+let recemSaltou = false;
 
 function alternarPainel(aberto) {
   painelAberto = aberto ?? !painelAberto;
@@ -2132,6 +2160,19 @@ engine.start((dt, elapsed) => {
     } else {
       canhoes.temMira = false;
     }
+    // Piratas: só no espaço, e a emboscada é decidida uma vez por checagem.
+    // O valor da carga é o gatilho principal — voar carregado passa a ter
+    // risco, e largar a carga passa a ser uma decisão.
+    piratas.talvezEmboscar(inventory.units ?? 0, recemSaltou);
+    recemSaltou = false;
+    piratas.atualizar(
+      dt,
+      ship.group.position,
+      shipController.velocity,
+      jogadorComoDono,
+      gameState.atmosphere < 0.15
+    );
+
     // As sentinelas ANTES dos projéteis: elas se movem e atiram, e o tiro
     // disparado neste quadro deve andar no mesmo quadro. Invertido, todo tiro
     // de drone ficaria um quadro parado na boca.
@@ -2440,7 +2481,7 @@ window.__nms = {
   gameState, inventory, discovery, scanner, seed: SEED, cloudQuality, audio,
   floatingOrigin, multiplayer, build, terraform, viewModel, galaxyMap, warp, weather,
   vitaisJogador, vitaisNave, sombras, ceuAmbiente, projeteis, blaster, jogadorComoDono, hud,
-  sentinelas, alvoJogador, montarAlvos, qualidade, menuPausa, medirGpu, aplicarQualidade, canhoes,
+  sentinelas, alvoJogador, montarAlvos, qualidade, menuPausa, medirGpu, aplicarQualidade, canhoes, piratas,
   saltarPara, alternarMapa,
   get ferramenta() { return ferramentaAtual(); },
   equipar,
