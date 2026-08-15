@@ -197,26 +197,12 @@ export function malharChunkVolumetrico({
     }
   }
 
-  // O mesher indexa `(i, j, k)` numa grade cúbica de lado `n+3`. A nossa tem
-  // dois lados angulares iguais e um radial diferente, então a chamada usa o
-  // maior e a leitura é remapeada — ver `campoRemapeado`.
-  const n = Math.max(na, nr);
-  const lado = n + 3;
-  const campoRemapeado = new Float32Array(lado * lado * lado);
-  // Preenche com "ar" (positivo) para que as células fora da região real nunca
-  // gerem superfície: densidade positiva em todos os cantos é o caso 0.
-  campoRemapeado.fill(1e6);
-  for (let r = 0; r < ladoRFinal; r++) {
-    for (let b = 0; b < ladoA; b++) {
-      for (let a = 0; a < ladoA; a++) {
-        campoRemapeado[(r * lado + b) * lado + a] = grade[(r * ladoA + b) * ladoA + a];
-      }
-    }
-  }
-
+  // O mesher aceita eixos independentes, então a grade vai DIRETO — sem
+  // remapear para um cubo e sem preencher excedente. O remapeamento antigo
+  // inventava paredes onde o "ar" de preenchimento encostava na rocha da borda.
   const malha = malharCampo({
-    campo: campoRemapeado,
-    n,
+    campo: grade,
+    dims: [na, na, nr],
     posicaoDe,
   });
 

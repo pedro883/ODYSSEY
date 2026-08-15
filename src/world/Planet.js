@@ -130,9 +130,22 @@ export class Planet {
     this.props = new PropScatter(this, this.terrainGroup);
     this.chunks.props = this.props;
 
-    // Faixas radiais abaixo do que a quadtree desenha. Só no modo volumétrico:
-    // no campo de altura não existe "abaixo da superfície" para desenhar.
-    this.cascaProfunda = VOLUMETRICO ? new CascaProfunda(this, this.terrainGroup) : null;
+    // -----------------------------------------------------------------------
+    // FAIXAS PROFUNDAS: DESLIGADAS ENQUANTO AS CAVERNAS NÃO DESCEM ATÉ LÁ.
+    //
+    // `profundidadeMaxima` caiu para 74 unidades — a casca que a quadtree malha
+    // vai até 90, e cavernas mais fundas ficavam SEM PISO, deixando ver o outro
+    // lado do planeta. Com a rede inteira dentro da faixa 0, tudo abaixo dela é
+    // rocha maciça, e pedir essas faixas gera malha vazia: trabalho de worker
+    // por nada.
+    //
+    // O código fica, e `?fundo=1` o liga. Ele volta a valer no dia em que as
+    // cavernas voltarem a descer — que é o que o passo 3b existe para permitir.
+    // -----------------------------------------------------------------------
+    const querFundo =
+      typeof location !== 'undefined' &&
+      new URLSearchParams(location.search).get('fundo') === '1';
+    this.cascaProfunda = VOLUMETRICO && querFundo ? new CascaProfunda(this, this.terrainGroup) : null;
     this.chunks.cascaProfunda = this.cascaProfunda;
 
     // A fauna carrega seus modelos de forma assíncrona; até lá ela fica

@@ -205,20 +205,37 @@ const EIXO = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
  *
  * @param {object} o
  * @param {Float32Array} o.campo amostras, `(n+3)³` valores (ver `n` e a borda)
- * @param {number} o.n número de CÉLULAS por eixo
+ * @param {number} o.n número de CÉLULAS por eixo (grade cúbica)
+ * @param {number[]} [o.dims] células por eixo `[nx, ny, nz]`, quando a grade
+ *   NÃO é cúbica; substitui `n` e evita ter de preencher o excedente
  * @param {number} [o.passo] tamanho da célula (grade cartesiana)
  * @param {number[]} [o.origem] canto mínimo da região (grade cartesiana)
  * @param {(i:number,j:number,k:number,saida:number[])=>void} [o.posicaoDe]
  *   posição de mundo de um nó da grade; substitui `passo`/`origem`
  * @returns {{positions:Float32Array, normals:Float32Array, indices:Uint32Array}}
  */
-export function malharCampo({ campo, n, passo, origem, posicaoDe }) {
+export function malharCampo({ campo, n, dims, passo, origem, posicaoDe }) {
   // A grade amostrada tem uma camada EXTRA em volta (por isso n+3 e não n+1):
   // ela existe só para o gradiente das normais nas bordas, que precisa de um
   // vizinho de cada lado. Sem ela as normais da borda do chunk sairiam
   // enviesadas e a costura entre chunks apareceria como um vinco de luz.
-  const lado = n + 3;
-  const em = (i, j, k) => campo[(k * lado + j) * lado + i];
+  //
+  // -------------------------------------------------------------------------
+  // EIXOS INDEPENDENTES, E POR QUE ISSO DEIXOU DE SER OPCIONAL
+  // -------------------------------------------------------------------------
+  // A versão anterior só aceitava grade cúbica, e quem tinha eixos diferentes
+  // (a grade esférica tem dois angulares e um radial) remapeava para um cubo do
+  // maior lado, preenchendo o excedente com "ar".
+  //
+  // Isso cria SUPERFÍCIE FALSA: onde o excedente de ar encosta na rocha real da
+  // borda, o mesher vê um cruzamento e gera parede. Medido numa faixa profunda
+  // sem caverna nenhuma — que deveria ser rocha maciça e devolver malha vazia —
+  // saíam 1.217 vértices, todos inventados.
+  // -------------------------------------------------------------------------
+  const [nx, ny, nz] = dims ?? [n, n, n];
+  const lx = nx + 3;
+  const ly = ny + 3;
+  const em = (i, j, k) => campo[(k * ly + j) * lx + i];
 
   const posicoes = [];
   const normais = [];
@@ -296,7 +313,7 @@ export function malharCampo({ campo, n, passo, origem, posicaoDe }) {
     // nota longa em `ARESTA_CANONICA`.
     const [dx, dy, dz, eixo] = ARESTA_CANONICA[aresta];
     const ia = i + dx, ja = j + dy, ka = k + dz;
-    const chave = (((ka * lado + ja) * lado + ia) * 3) + eixo;
+    const chave = (((ka * ly + ja) * lx + ia) * 3) + eixo;
 
     const existente = cache.get(chave);
     if (existente !== undefined) return existente;
@@ -343,9 +360,9 @@ export function malharCampo({ campo, n, passo, origem, posicaoDe }) {
 
   // O laço percorre as CÉLULAS. O deslocamento de 1 é a camada extra da borda:
   // a célula (0,0,0) tem seu canto mínimo na amostra (1,1,1).
-  for (let k = 1; k <= n; k++) {
-    for (let j = 1; j <= n; j++) {
-      for (let i = 1; i <= n; i++) {
+  for (let k = 1; k <= nz; k++) {
+    for (let j = 1; j <= ny; j++) {
+      for (let i = 1; i <= nx; i++) {
         let caso = 0;
         for (let c = 0; c < 8; c++) {
           const d = CANTO[c];
