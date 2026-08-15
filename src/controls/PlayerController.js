@@ -297,14 +297,29 @@ export class PlayerController {
     this.position.addScaledVector(this.velocity, dt);
 
     // --- Colisão com o solo -------------------------------------------------
+    // -----------------------------------------------------------------------
+    // A COLISÃO RESOLVE CONTRA O CHÃO SÓLIDO, NÃO CONTRA A SUPERFÍCIE DE APOIO.
+    //
+    // Sobre o mar as duas divergem: `surfaceRadius` é o NÍVEL DO MAR (é o que
+    // faz a nave pousar na água) e `groundRadius` é o FUNDO. Resolvendo contra
+    // a primeira, o corpo era reassentado na linha d'água todo quadro e o
+    // resultado era andar sobre o oceano — com toda a natação já escrita logo
+    // acima, e inalcançável, porque nada conseguia afundar um centímetro.
+    //
+    // Contra o fundo, quem entra no mar afunda até o empuxo segurá-lo, que é o
+    // que as linhas de `submersao` sempre esperaram encontrar.
+    // -----------------------------------------------------------------------
     const after = planet.sampleAt(this.position);
-    if (after.distance < after.surfaceRadius) {
+    if (after.distance < after.groundRadius) {
       this.up.copy(after.direction);
-      this.position.copy(planet.group.position).addScaledVector(this.up, after.surfaceRadius);
+      this.position.copy(planet.group.position).addScaledVector(this.up, after.groundRadius);
       const into = this.velocity.dot(this.up);
       if (into < 0) this.velocity.addScaledVector(this.up, -into);
       this.grounded = true;
-    } else if (after.altitude > 0.35) {
+    } else if (after.distance - after.groundRadius > 0.35) {
+      // Também aqui a referência é o CHÃO. Com `altitude` (medida do nível do
+      // mar) todo nadador ficava permanentemente `grounded`, porque debaixo
+      // d'água ela é negativa — e "no chão" dá pulo e recarrega o jetpack.
       this.grounded = false;
     }
   }

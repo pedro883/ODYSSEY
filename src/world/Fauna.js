@@ -304,8 +304,32 @@ export class Fauna {
     if (_tangent.lengthSq() < 1e-6) _tangent.set(1, 0, 0);
     _tangent.normalize().applyAxisAngle(_up, this._rand() * Math.PI * 2);
 
-    const distancia = SPAWN_MIN + this._rand() * (SPAWN_MAX - SPAWN_MIN);
-    const posicao = reference.clone().addScaledVector(_tangent, distancia);
+    // -----------------------------------------------------------------------
+    // BICHO DE TERRA NÃO NASCE NO MAR.
+    //
+    // Agora que quem anda se cola ao FUNDO (ver `_mover`), nascer sobre água
+    // deixou de ser inofensivo: em vez de um bicho pastando na lâmina d'água,
+    // seria um bicho no fundo do oceano, invisível e inalcançável. E como o
+    // planeta em teste tem 65% de superfície submersa, isso não seria raro —
+    // seria a maioria.
+    //
+    // Algumas tentativas em ângulos diferentes bastam: quem procura terra num
+    // mundo com terra a acha rápido, e desistir devolvendo `null` só custa o
+    // repovoamento deste quadro (o `while` de `update` para no primeiro nulo e
+    // tenta de novo no seguinte).
+    // -----------------------------------------------------------------------
+    let posicao = null;
+    for (let tentativa = 0; tentativa < 6; tentativa++) {
+      const distancia = SPAWN_MIN + this._rand() * (SPAWN_MAX - SPAWN_MIN);
+      const candidato = reference.clone().addScaledVector(_tangent, distancia);
+      const solo = this.planet.sampleAt(candidato);
+      if (!this.planet.config.hasWater || solo.elevation > 0.5 || especie.voa) {
+        posicao = candidato;
+        break;
+      }
+      _tangent.applyAxisAngle(_up, 1.7);
+    }
+    if (!posicao) return null;
 
     const objeto = new THREE.Group();
     const modelo = especie.asset.scene.clone(true);
@@ -550,12 +574,19 @@ export class Fauna {
       objeto.position.addScaledVector(criatura.heading, criatura.velocidade * dt);
     }
 
+    // -----------------------------------------------------------------------
     // Cola no chão (ou plana, se for espécie voadora).
+    //
+    // As duas usam superfícies DIFERENTES, e a distinção é o que tirava os
+    // bichos de cima do mar. Quem anda se cola ao chão SÓLIDO — no oceano, o
+    // fundo. Quem voa se mede a partir da superfície de APOIO, que sobre a água
+    // é o nível do mar: uma ave plana a um metro e meio da lâmina d'água, e não
+    // a um metro e meio de um fundo a oitenta unidades de profundidade.
+    // -----------------------------------------------------------------------
     const abaixo = this.planet.sampleAt(_delta.copy(objeto.position).add(this.planet.group.position));
     const altura = criatura.especie.voa ? 1.6 + Math.sin(performance.now() * 0.002) * 0.4 : 0;
-    objeto.position
-      .copy(abaixo.direction)
-      .multiplyScalar(abaixo.surfaceRadius + altura);
+    const base = criatura.especie.voa ? abaixo.surfaceRadius : abaixo.groundRadius;
+    objeto.position.copy(abaixo.direction).multiplyScalar(base + altura);
 
     // --- Orientação ---------------------------------------------------------
     _up.copy(abaixo.direction);

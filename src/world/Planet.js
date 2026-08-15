@@ -189,6 +189,7 @@ export class Planet {
     this._sample = {
       distance: 0,
       surfaceRadius: 0,
+      groundRadius: 0,
       altitude: 0,
       direction: new THREE.Vector3(),
       elevation: 0,
@@ -314,12 +315,29 @@ export class Planet {
 
     const elevation = this.sampler.heightAt(local.x, local.y, local.z);
 
-    // Em mundos com oceano o "chão" para pouso é o nível do mar, não o fundo.
+    // -----------------------------------------------------------------------
+    // DUAS SUPERFÍCIES, E ELAS NÃO SÃO A MESMA COISA SOBRE O MAR.
+    //
+    // `surfaceRadius` é a superfície de APOIO: onde a nave pousa, onde um drone
+    // mede sua altura de voo, onde uma estrutura se assenta. Sobre o oceano ela
+    // é o nível do mar de propósito — é essa convenção que faz a nave pousar na
+    // água em vez de mergulhar até o fundo.
+    //
+    // `groundRadius` é o chão SÓLIDO: a rocha, e no mar o FUNDO. É contra ele
+    // que a colisão de um corpo tem de resolver.
+    //
+    // Usar `surfaceRadius` para colisão foi o que fez o jogador e todos os
+    // bichos ANDAREM SOBRE O MAR: a cada quadro a colisão via "estou abaixo da
+    // superfície" e reassentava o corpo exatamente no nível do mar. A natação
+    // já estava escrita e era inalcançável — nenhum corpo conseguia ficar
+    // abaixo da linha d'água tempo nenhum.
+    // -----------------------------------------------------------------------
     const groundElevation = this.config.hasWater ? Math.max(elevation, 0) : elevation;
 
     sample.distance = distance;
     sample.elevation = elevation;
     sample.surfaceRadius = this.config.radius + groundElevation;
+    sample.groundRadius = this.config.radius + elevation;
     sample.altitude = distance - sample.surfaceRadius;
 
     // -----------------------------------------------------------------------
@@ -401,7 +419,10 @@ export class Planet {
     if (this.sonda && (dentroDoTerreno || (emTerra && sample.altitude < ALTURA_SONDAVEL))) {
       const chao = this.sonda.chaoAbaixo(_dirSonda, distance, ALCANCE_SONDA);
       if (chao !== null) {
+        // Numa caverna as duas superfícies COINCIDEM: o piso é rocha e é
+        // também onde se pousa. Não há coluna d'água por cima dele.
         sample.surfaceRadius = chao;
+        sample.groundRadius = chao;
         sample.altitude = distance - chao;
       }
     }

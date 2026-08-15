@@ -93,8 +93,13 @@ export function criarOceano(cfg, heightAt) {
   // deixar de ser mar.
   // ---------------------------------------------------------------------------
   const tom = new THREE.Color().fromArray(cfg.waterColor);
-  const raso = new THREE.Color(0x3fc2c9).lerp(tom, 0.2);
-  const fundo = new THREE.Color(0x06263f).lerp(tom, 0.15);
+  // O fundo era 0x06263f, escuro demais para sobreviver à perspectiva aérea:
+  // medido, a névoa a algumas centenas de unidades domina qualquer superfície
+  // escura e o mar chegava à tela como uma mancha cáqui da cor da atmosfera. A
+  // água precisa ter brilho comparável ao do terreno para continuar sendo água
+  // depois do passe de névoa.
+  const raso = new THREE.Color(0x4fd0d6).lerp(tom, 0.2);
+  const fundo = new THREE.Color(0x0d3f66).lerp(tom, 0.15);
 
   const uniforms = {
     uTempo: { value: 0 },
@@ -117,12 +122,55 @@ export function criarOceano(cfg, heightAt) {
   const material = new THREE.ShaderMaterial({
     uniforms,
     transparent: true,
-    depthWrite: false,
+    // -------------------------------------------------------------------------
+    // A ÁGUA ESCREVE PROFUNDIDADE — E ISSO NÃO É DETALHE DE ORDENAÇÃO.
+    //
+    // Com `depthWrite: false` a superfície do mar não aparecia no depth buffer,
+    // e a perspectiva aérea (ver `Engine.render`) trabalha lendo esse buffer.
+    // O resultado é que cada pixel de água era enevoado pela distância do FUNDO
+    // atrás dele — centenas ou milhares de unidades — em vez da distância da
+    // própria lâmina d'água, a vinte metros do observador.
+    //
+    // Foi isso que apagou o mar. A névoa de longa distância lavava a superfície
+    // inteira até a cor da atmosfera, e o que sobrava era uma chapa de uma cor
+    // só, sem horizonte e sem ondulação: exatamente o defeito relatado. O teste
+    // que mostrou isso foi esconder o terreno — o oceano sumia JUNTO, o que só
+    // faz sentido se o que estava sendo desenhado ali era névoa sobre o fundo.
+    //
+    // Escrever profundidade é seguro aqui porque a água é uma casca única e
+    // fechada: não há duas camadas transparentes para ordenar entre si.
+    // -------------------------------------------------------------------------
+    depthWrite: true,
     // DUAS FACES: com `FrontSide`, mergulhar fazia a água simplesmente sumir —
     // o nadador via o céu por dentro do mar. A face de dentro é o teto de água
     // sobre a cabeça de quem está submerso.
     side: THREE.DoubleSide,
     vertexShader: /* glsl */ `
+      // -----------------------------------------------------------------------
+      // ESTAS TRÊS LINHAS DE "#include" SÃO A RAZÃO DE O MAR NÃO APARECER.
+      //
+      // O renderizador roda com "logarithmicDepthBuffer: true" (ver "Engine.js"),
+      // e isso não é uma opção de contexto: é uma CONVENÇÃO DE SHADER. Cada
+      // material precisa codificar a profundidade da mesma forma, através dos
+      // chunks que o próprio three.js injeta. Os materiais nativos e os shaders
+      // da atmosfera e das nuvens fazem isso; este não fazia.
+      //
+      // O resultado é que a água escrevia e comparava profundidade numa ESCALA
+      // DIFERENTE da do resto da cena. O teste de profundidade então reprovava
+      // quase todos os fragmentos do oceano, e sobrava a faixa estreita perto do
+      // horizonte onde as duas escalas por acaso concordavam — literalmente
+      // "apenas uma linha nas bordas", que foi como o defeito chegou.
+      //
+      // Foi por isso que as tentativas anteriores de mexer em cor, opacidade e
+      // ordem de desenho não mudaram nada: o fragmento morria antes de chegar
+      // ao blend. O que fechou o diagnóstico foi um material de depuração opaco
+      // e sem "discard" — ele TAMBÉM não apareceu, embora "onBeforeRender" do
+      // oceano estivesse sendo chamado e o raycast acertasse a casca à frente
+      // do fundo do mar. Só sobra o teste de profundidade.
+      // -----------------------------------------------------------------------
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+
       attribute float profundidade;
       varying float vProf;
       varying vec3 vLocal;
@@ -133,10 +181,16 @@ export function criarOceano(cfg, heightAt) {
         vLocal = position;
         vNormal = normalize(normalMatrix * normal);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        #include <logdepthbuf_vertex>
       }
     `,
     fragmentShader: /* glsl */ `
       precision highp float;
+
+      // Ver a explicação no vertex shader: sem este par a água é reprovada no
+      // teste de profundidade e não chega à tela.
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
 
       uniform float uTempo;
       uniform vec3 uSol;
@@ -178,6 +232,37 @@ export function criarOceano(cfg, heightAt) {
           u.z);
       }
 
+      /**
+       * O céu na direção "d", aproximado.
+       *
+       * Não reaproveita o shader da atmosfera de propósito: rodar o
+       * espalhamento inteiro por fragmento de água custaria caro para responder
+       * uma pergunta simples. O que a água precisa do céu é a FORMA dele —
+       * lavado e claro junto ao horizonte, escuro e saturado no alto — e isso
+       * são duas cores e um expoente.
+       */
+      vec3 corDoCeu(vec3 d, vec3 radial, vec3 sol, vec3 tint, float dia) {
+        float alto = clamp(dot(d, radial), 0.0, 1.0);
+        // ------------------------------------------------------------------
+        // O CLAREAMENTO PARA O HORIZONTE É REAL, MAS PEQUENO.
+        //
+        // A primeira tentativa empurrava o horizonte 55% na direção do branco e
+        // o resultado foi uma FAIXA BRANCA ESTOURADA na linha do horizonte: ali
+        // o fresnel satura em 1, então o que se via era essa cor pura, sem nada
+        // do corpo da água por baixo. E ela mentia sobre a cena — este céu é
+        // verde-escuro, e um mar espelhando branco não pertence a ele.
+        //
+        // O reflexo tem de ficar ANCORADO no tom do céu: o mar de um mundo de
+        // céu escuro é escuro. Só o gradiente precisa sobreviver.
+        // ------------------------------------------------------------------
+        vec3 horizonte = mix(tint, vec3(1.0), 0.28);
+        vec3 zenite = tint * 0.45;
+        vec3 c = mix(horizonte, zenite, pow(alto, 0.55));
+        // O halo em volta do sol: na água ele vira o clarão do lado iluminado.
+        c += tint * pow(max(dot(d, sol), 0.0), 8.0) * 0.35;
+        return c * 0.62 * (0.12 + 0.88 * dia);
+      }
+
       void main() {
         // ---------------------------------------------------------------
         // QUEM ESCONDE A ÁGUA SOB O CONTINENTE É O TESTE DE PROFUNDIDADE.
@@ -194,6 +279,8 @@ export function criarOceano(cfg, heightAt) {
         // como ser vista: pular esses fragmentos economiza mistura à toa.
         // ---------------------------------------------------------------
         if (vProf < -40.0) discard;
+
+        #include <logdepthbuf_fragment>
 
         vec3 radial = normalize(vLocal);
         vec3 paraCamera = normalize(uCamera - vLocal);
@@ -240,18 +327,46 @@ export function criarOceano(cfg, heightAt) {
         // A ondulação grande morre no raso — perto da praia a água é agitada
         // por dentro, não ondulada.
         float aguaAberta = smoothstep(1.0, 25.0, vProf);
-        float gx = (ax - a0) * 0.5 * aguaAberta + (bx - b0) * 0.32 + (cx - c0) * 0.22 + (fx - f0) * 0.16;
-        float gz = (az - a0) * 0.5 * aguaAberta + (bz - b0) * 0.32 + (cz - c0) * 0.22 + (fz - f0) * 0.16;
+        // A oitava mais fina entra com metade do peso de antes (0.08 e não
+        // 0.16): no primeiro plano ela tem período de ~2,5 unidades, e com peso
+        // cheio o mar perto da câmera virava CHUVISCO — grão de areia, não
+        // ondulação. Ela continua ali para o brilho não ficar liso demais.
+        float gx = (ax - a0) * 0.5 * aguaAberta + (bx - b0) * 0.32 + (cx - c0) * 0.22 + (fx - f0) * 0.08;
+        float gz = (az - a0) * 0.5 * aguaAberta + (bz - b0) * 0.32 + (cz - c0) * 0.22 + (fz - f0) * 0.08;
+
+        // -------------------------------------------------------------------
+        // A ONDULAÇÃO PRECISA MORRER COM A DISTÂNCIA.
+        //
+        // Uma normal ruidosa a mil unidades tem período menor que um pixel:
+        // cada pixel sorteia uma inclinação diferente, e depois que o antialias
+        // mistura tudo sobra a MÉDIA — uma chapa de cor única. Parte da
+        // sensação de "chapa pintada" vinha daí. Amortecendo com a distância, o
+        // longe fica liso e espelhado, que é como o mar se comporta mesmo: a
+        // ondulação só se distingue perto do observador.
+        // -------------------------------------------------------------------
+        float dist = length(uCamera - vLocal);
+        float nitidez = 1.0 - smoothstep(70.0, 700.0, dist);
+        gx *= nitidez;
+        gz *= nitidez;
 
         vec3 tangente = normalize(cross(radial, vec3(0.0, 1.0, 0.0)) + vec3(1e-5));
         vec3 bitangente = cross(radial, tangente);
-        // 0.55 no lugar dos ~3 de antes: inclinação de onda de verdade.
         vec3 normal = normalize(radial + (tangente * gx + bitangente * gz) * 0.95);
         float crista = (b0 + c0) * 0.5;
 
-        // --- Cor por profundidade -------------------------------------------
+        // Quanto o sol está alto NESTE ponto do planeta — e não em relação à
+        // normal da onda. Separar as duas coisas é o que impede o mar do lado
+        // noturno de continuar cintilando.
+        float diaLocal = smoothstep(-0.08, 0.25, dot(radial, uSol));
+
+        // --- O corpo da água --------------------------------------------------
+        // Cor por profundidade. A água não é uma superfície difusa: ela espalha
+        // luz por dentro, então a variação com o sol é suave e nunca chega a
+        // zero — o mar ao entardecer escurece, não apaga.
         float mistura = smoothstep(0.5, 45.0, vProf);
-        vec3 cor = mix(uRaso, uFundo, mistura);
+        vec3 corpo = mix(uRaso, uFundo, mistura);
+        float difusa = max(dot(normal, uSol), 0.0);
+        corpo *= (0.55 + 0.45 * diaLocal) * (0.85 + 0.30 * difusa);
 
         // --- Espuma ----------------------------------------------------------
         // Duas fontes: a arrebentação (onde o fundo sobe) e as cristas das
@@ -260,51 +375,78 @@ export function criarOceano(cfg, heightAt) {
         float borda = 1.0 - smoothstep(0.0, 4.5, vProf);
         float renda = ruido(vLocal * uEscalaOnda * 7.0 + vec3(uTempo * 0.5)) * 0.5 + 0.5;
         float espuma = smoothstep(0.4, 0.95, borda * (0.5 + renda));
-        espuma = max(espuma, smoothstep(0.30, 0.42, crista) * aguaAberta * 0.5);
-        cor = mix(cor, uEspuma, espuma);
+        // O limiar da crista é ALTO (0.55) de propósito. Com 0.34, um quarto do
+        // ruído passava e o mar aberto ficava salpicado de manchas claras — mais
+        // parecido com uma praia de areia vista de longe do que com carneirinhos.
+        // Espuma de crista cobre uma fração pequena da superfície; é a raridade
+        // dela que faz a onda parecer alta quando aparece.
+        espuma = max(espuma, smoothstep(0.55, 0.78, crista) * aguaAberta * nitidez * 0.30);
+        corpo = mix(corpo, uEspuma * (0.35 + 0.65 * diaLocal), espuma);
 
-        // --- Luz --------------------------------------------------------------
-        // O piso de luz ambiente é ALTO (0.55) por um motivo específico: a
-        // água quase nunca encara o sol de frente — a normal dela aponta para
-        // cima e o sol passa rasante boa parte do dia. Com piso baixo, o mar
-        // fica preto ao entardecer e o que sobra na tela é o fundo aparecendo
-        // por transparência, o que lê como poça de lama, não como mar.
-        float difusa = max(dot(normal, uSol), 0.0);
-        cor *= 0.55 + 0.6 * difusa;
+        // ---------------------------------------------------------------------
+        // O CÉU REFLETIDO É O QUE FAZ AQUILO LER COMO ÁGUA.
+        //
+        // Era isto que faltava. A versão anterior misturava um pouco da cor do
+        // céu com peso fixo de 0.35, e o efeito prático era quase nenhum: no mar
+        // aberto a profundidade satura, a cor do corpo vira constante, e o
+        // resultado é uma chapa azul-marinho de uma cor só, sem horizonte —
+        // exatamente o defeito relatado.
+        //
+        // Água tem índice de refração 1.33: reflete 2% de frente e quase 100%
+        // de raspão. Como QUASE TODO o mar visível é visto de raspão, o que se
+        // vê do mar é o céu. E é a variação do céu refletido — claro perto do
+        // horizonte, escuro no alto — que desenha o horizonte, dá volume à
+        // superfície e distingue "olhar para o mar" de "olhar para uma chapa".
+        //
+        // Por isso o fresnel aqui é o de Schlick de verdade, com F0 = 0.02, e
+        // entra como peso da mistura inteira — não como um tempero de 35%.
+        // ---------------------------------------------------------------------
+        vec3 refl = reflect(-paraCamera, normal);
+        float cosT = max(dot(normal, paraCamera), 0.0);
+        float fresnel = 0.02 + 0.98 * pow(1.0 - cosT, 5.0);
 
-        // Especular largo (o brilho do céu na ondulação) + estreito (o sol).
+        vec3 ceu = corDoCeu(refl, radial, uSol, uCeu, diaLocal);
+        vec3 cor = mix(corpo, ceu, fresnel);
+
+        // --- O sol na água ----------------------------------------------------
+        // O caminho de luz, em duas larguras: o núcleo (o reflexo do disco) e o
+        // halo que se espalha pelas cristas e desenha a estrada brilhante até o
+        // horizonte. Os dois multiplicados pelo fresnel — reflexo é reflexo.
         vec3 meio = normalize(uSol + paraCamera);
         float ndoth = max(dot(normal, meio), 0.0);
-        // Expoente 140 e não 420: com o brilho concentrado demais, o reflexo do
-        // sol vira um ponto único do tamanho de um pixel e a ondulação some.
-        // Mais aberto, ele se espalha pelas cristas e desenha o caminho de luz
-        // sobre o mar — que é o que faz a água parecer em movimento.
-        cor += uCeu * pow(ndoth, 18.0) * 0.4;
-        cor += vec3(1.0, 0.96, 0.88) * pow(ndoth, 140.0) * 2.6;
+        float brilho = pow(ndoth, 260.0) * 3.0 + pow(ndoth, 24.0) * 0.35;
+        cor += vec3(1.0, 0.95, 0.86) * brilho * fresnel * 2.5 * diaLocal;
 
-        // --- Fresnel ----------------------------------------------------------
-        // De cima a água deixa ver o fundo; de raspão vira espelho do céu. É a
-        // pista que separa "olhar para o mar" de "olhar para dentro dele".
-        // 0.35 e não 0.6: com 0.6, olhar o mar de pé (ângulo quase rasante,
-        // fresnel ~1) trocava dois terços da cor da água pela do céu e o
-        // oceano virava uma chapa cinza-clara até o horizonte.
-        float fresnel = pow(1.0 - max(dot(normal, paraCamera), 0.0), 4.0);
-        cor = mix(cor, uCeu * 0.85, fresnel * 0.35);
+        // Espuma é matéria, não espelho: ela não reflete o céu. Sem esta linha
+        // a arrebentação desaparecia sob o reflexo em ângulo rasante — que é
+        // justamente o ângulo de quem olha a praia de pé.
+        cor = mix(cor, uEspuma * (0.4 + 0.6 * diaLocal), espuma * 0.6);
 
         // --- Submerso ---------------------------------------------------------
         // Visto de baixo, o que se vê é a massa de água entre o olho e o céu:
         // azul profundo, praticamente opaco, com a luz vindo de cima.
-        cor = mix(cor, uFundo * (0.5 + 0.5 * difusa), uSubmerso);
+        cor = mix(cor, uFundo * (0.35 + 0.65 * diaLocal), uSubmerso);
 
-        // A transparência é generosa só na beirada. Antes ela ia de 0.55 a
-        // 0.96 ao longo de dez unidades, e como quase todo litoral tem menos
-        // que isso, o mar inteiro aparecia meio transparente: o que se via era
-        // o FUNDO ARENOSO por baixo de um véu azul, ou seja, um caldo esverdeado.
-        // Agora só a franja da praia deixa ver o fundo.
-        float alfa = mix(0.86, 0.99, smoothstep(0.0, 5.0, vProf));
+        // --- Transparência -----------------------------------------------------
+        // O raso PRECISA deixar ver o fundo. O degradê do fundo aparecendo sob
+        // um véu que vai fechando com a profundidade é o sinal mais barato e
+        // mais forte de que aquilo é líquido, e não uma superfície pintada — e
+        // é ele que faz a linha da praia parecer molhada em vez de recortada.
+        //
+        // A versão anterior abria em 0.86 e fechava em cinco unidades: como
+        // quase todo litoral tem menos que isso, na prática a água era opaca do
+        // primeiro metro em diante e o gradiente nunca era visto.
+        // A rampa fecha em SETE unidades, e não em vinte e duas. O oceano deste
+        // planeta tem 35 de profundidade máxima e a maior parte fica entre 3 e
+        // 10: com a rampa longa, quase todo o mar ficava meio transparente e o
+        // que se via era o FUNDO MARROM por baixo de um véu azul. Água de
+        // verdade esconde o fundo em poucos metros — é por isso que só a franja
+        // da praia deixa ver areia.
+        float alfa = mix(0.35, 0.97, smoothstep(0.0, 7.0, vProf));
         alfa = max(alfa, espuma);
-        alfa = clamp(alfa + fresnel * 0.4, 0.0, 1.0);
-        alfa = mix(alfa, 0.94, uSubmerso);
+        alfa = max(alfa, fresnel);
+        alfa = clamp(alfa, 0.0, 1.0);
+        alfa = mix(alfa, 0.96, uSubmerso);
 
         gl_FragColor = vec4(cor, alfa);
       }
