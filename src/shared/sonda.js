@@ -40,6 +40,15 @@
  */
 
 /**
+ * Quanto a sonda procura para CIMA quando o ponto está dentro da rocha.
+ *
+ * Curto: serve para desenterrar quem afundou uma fração no piso, não para
+ * resgatar quem está soterrado a cinquenta metros — nesse caso não existe piso
+ * local e a resposta do campo de altura é a sensata.
+ */
+const SUBIDA_MAXIMA = 12;
+
+/**
  * @param {{densidadeComAltura:Function, superficieEm:Function, raio:number}} campo
  */
 export function criarSonda(campo) {
@@ -136,7 +145,30 @@ export function criarSonda(campo) {
     // para CIMA, para a superfície, e não atraído para um vão lá embaixo.
     // -----------------------------------------------------------------------
     const altura = campo.superficieEm(dir[0], dir[1], dir[2]);
-    if (amostra(dir, raio, altura) < 0) return null;
+
+    if (amostra(dir, raio, altura) < 0) {
+      // ---------------------------------------------------------------------
+      // DENTRO DA ROCHA, O CHÃO ESTÁ ACIMA — E ACHÁ-LO É O QUE PERMITE FICAR
+      // NUMA CAVERNA.
+      //
+      // Devolver `null` aqui parecia seguro (quem está enterrado é empurrado
+      // para cima pelo campo de altura) e destruía o caso que mais importa: ao
+      // POUSAR no piso de uma caverna o corpo afunda uma fração nele, porque é
+      // assim que a colisão assenta. A sonda via rocha, devolvia null,
+      // `sampleAt` caía de volta na superfície EXTERNA e o jogador era
+      // teletransportado dezenas de unidades para cima.
+      //
+      // Medido numa boca real: a queda funcionava de +3 até -40, e a -44 —
+      // meio metro dentro do piso — o chão devolvido saltava de -43 para 0.
+      //
+      // O certo é procurar a primeira superfície ACIMA: para quem afundou no
+      // piso da caverna é o próprio piso, e para quem afundou no relevo é o
+      // relevo. A busca é CURTA de propósito: se o corpo está fundo demais na
+      // rocha, não há piso local nenhum e o campo de altura volta a ser a
+      // resposta sensata.
+      // ---------------------------------------------------------------------
+      return cruzamentoRadial(dir, raio, raio + SUBIDA_MAXIMA, 0.5);
+    }
 
     return cruzamentoRadial(dir, raio, raio - alcance, 2.0);
   }

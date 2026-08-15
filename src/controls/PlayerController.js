@@ -218,7 +218,24 @@ export class PlayerController {
     // partir dele (negativa = fundo submerso), então a superfície da água é a
     // esfera de raio `config.radius`. É a mesma referência que o oceano usa.
     // -----------------------------------------------------------------------
-    const naAgua = planet.config.hasWater;
+    // -----------------------------------------------------------------------
+    // "ABAIXO DO NÍVEL DO MAR" NÃO É "DENTRO D'ÁGUA".
+    //
+    // A regra era só `hasWater`, com a profundidade medida contra o raio do
+    // planeta. Numa caverna cujo piso fica abaixo do nível do mar isso ligava o
+    // empuxo em terra seca, e o jogador SUBIA sozinho depois de pousar — a
+    // queda na caverna funcionava e a permanência não.
+    //
+    // Tentei antes resolver com uma marcha para cima procurando rocha, e estava
+    // errado por outro motivo: numa boca de caverna o poço é aberto até o topo,
+    // logo não há rocha acima e o teste dizia "água". Mas a boca abre a +31 do
+    // nível do mar — água nenhuma entraria ali.
+    //
+    // A pergunta certa é sobre o TERRENO, não sobre o corpo: só há coluna
+    // d'água onde o chão daquele lugar está abaixo do nível do mar. É mais
+    // simples que a marcha, mais correto, e de graça.
+    // -----------------------------------------------------------------------
+    const naAgua = planet.config.hasWater && sample.elevation < 0;
     const profundidade = naAgua ? planet.config.radius - sample.distance : -1;
     const submersao = naAgua
       ? Math.min(1, Math.max(0, (profundidade + SETTINGS.eyeHeight * 0.35) / SETTINGS.eyeHeight))

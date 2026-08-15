@@ -361,13 +361,15 @@ export class Planet {
     // A ressalva do oceano permanece: em água, `surfaceRadius` é o NÍVEL DO MAR
     // por convenção, e trocá-lo pelo fundo quebra pouso e flutuação.
     // -----------------------------------------------------------------------
+    // A sonda trabalha com um array simples, e não com `Vector3`: ela é
+    // compartilhada com os workers, onde importar a engine inteira seria
+    // desperdício. Passar o `Vector3` direto daria `dir[0] === undefined` e NaN
+    // silencioso em toda a colisão. Preenchido aqui porque as DUAS consultas
+    // abaixo precisam dele, e elas rodam em condições diferentes.
+    _dirSonda[0] = local.x; _dirSonda[1] = local.y; _dirSonda[2] = local.z;
+
     const emTerra = !this.config.hasWater || elevation > 0;
     if (this.sonda && emTerra && sample.altitude < ALTURA_SONDAVEL) {
-      // A sonda trabalha com um array simples, e não com `Vector3`: ela é
-      // compartilhada com os workers, onde importar a engine inteira seria
-      // desperdício. Passar o `Vector3` direto daria `dir[0] === undefined` e
-      // NaN silencioso em toda a colisão.
-      _dirSonda[0] = local.x; _dirSonda[1] = local.y; _dirSonda[2] = local.z;
       const chao = this.sonda.chaoAbaixo(_dirSonda, distance, ALCANCE_SONDA);
       if (chao !== null) {
         sample.surfaceRadius = chao;
