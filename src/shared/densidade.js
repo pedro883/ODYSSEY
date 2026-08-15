@@ -74,6 +74,13 @@ export function criarCampoDeDensidade(cfg, heightAt) {
 
   const C = cfg.cavernas ?? PADRAO_CAVERNAS;
 
+  // `?cavernas=off` desliga a escavação inteira. Existe para depuração visual:
+  // é a única forma de responder "esta marca no terreno é uma boca ou um
+  // defeito?" sem adivinhar — e já respondeu uma vez.
+  const desligadas =
+    typeof location !== 'undefined' &&
+    new URLSearchParams(location.search).get('cavernas') === 'off';
+
   /**
    * Altura da superfície numa direção. Extraída para que o mesher possa
    * consultá-la sem recalcular a densidade inteira.
@@ -168,7 +175,7 @@ export function criarCampoDeDensidade(cfg, heightAt) {
     // Positivo fora, negativo dentro.
     let d = dist - alturaSuperficie;
 
-    if (!C.ligadas) return d;
+    if (!C.ligadas || desligadas) return d;
 
     // -------------------------------------------------------------------
     // AS CAVERNAS SÓ AGEM ABAIXO DA SUPERFÍCIE, E COM DUAS MARGENS.
@@ -291,7 +298,30 @@ export const PADRAO_CAVERNAS = {
    * o valor de ter encontrado uma.
    */
   limiarBoca: 0.55,
-  /** Até onde a rede desce, em unidades abaixo da superfície. */
-  profundidadeMaxima: 420,
-  margemPiso: 120,
+  /**
+   * Até onde a rede desce, em unidades abaixo da superfície.
+   *
+   * =======================================================================
+   * CASADO COM A ESPESSURA DA CASCA DESENHADA, E NÃO ESCOLHIDO À VONTADE
+   * =======================================================================
+   * Era 420, e a casca que o `chunkVolumetrico` malha vai só até 90 unidades
+   * abaixo da elevação mínima do chunk. Toda caverna mais funda que isso tinha
+   * teto e paredes desenhados e NENHUM PISO — o jogador olhava para baixo e via
+   * o outro lado do planeta, porque ali não havia geometria nenhuma.
+   *
+   * A regra passou a ser: não gerar o que não se consegue desenhar. Com a rede
+   * inteira dentro da casca, toda caverna é fechada.
+   *
+   * Quando as faixas profundas (`CascaProfunda`) estiverem verificadas em
+   * jogo, este número volta a poder crescer — é ele que as torna úteis.
+   * =======================================================================
+   */
+  profundidadeMaxima: 74,
+  /**
+   * Faixa em que a rede se fecha antes do fundo da casca.
+   *
+   * Precisa ser larga o bastante para o fechamento ser gradual: um corte seco
+   * deixaria um piso perfeitamente plano, que o olho identifica na hora.
+   */
+  margemPiso: 34,
 };

@@ -220,7 +220,27 @@ export function malharChunkVolumetrico({
     posicaoDe,
   });
 
-  const comSaia = costurarSaia(malha, PASSO_RADIAL * 1.6);
+  // -------------------------------------------------------------------------
+  // A SAIA ACOMPANHA O TAMANHO DO CHUNK, E NÃO UM VALOR FIXO.
+  //
+  // Ela era `PASSO_RADIAL * 1.6` — 7,6 unidades, sempre. Isso basta no LOD fino
+  // e é irrisório no grosseiro, onde um chunk cobre milhares de unidades e o
+  // degrau entre dois níveis vizinhos é da ordem do relevo inteiro.
+  //
+  // O sintoma foi exatamente esse: fendas finas visíveis DO ESPAÇO, riscando o
+  // planeta, e que somem ao aproximar. Vistas de longe são os chunks grossos;
+  // de perto, os finos — cuja saia já era suficiente. Cheguei a testar
+  // multiplicar a saia por cinco e não mudou nada, porque a captura era de 200
+  // unidades de altitude, ainda em LOD fino.
+  //
+  // A fórmula é a mesma que o caminho de campo de altura já usava: uma fração
+  // da aresta do chunk mais uma fração do relevo local. Um platô plano quase não
+  // precisa de saia; um chunk que cobre da praia ao pico precisa de bastante.
+  // -------------------------------------------------------------------------
+  const arestaDoChunk = 2 * cfg.radius * size;
+  const profundidadeSaia =
+    arestaDoChunk * (cfg.lod.skirtRatio ?? 0.05) + (hMax - hMin) * 0.35 + PASSO_RADIAL;
+  const comSaia = costurarSaia(malha, profundidadeSaia);
 
   return { ...comSaia, rMin, rMax, hMin, hMax, colunas: ladoA * ladoA, amostras: total };
 }
