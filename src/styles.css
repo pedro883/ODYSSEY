@@ -1192,6 +1192,21 @@ body.modo-mapa #markers { display: none; }
 .marker--ship .glyph { border-radius: 50%; transform: none; }
 .marker--moon { color: #b9c6d4; }
 
+/* Mira preditiva dos canhões. Verde-limão para não se confundir com nenhum
+   marcador de navegação: ela não diz "há algo ali", diz "atire AQUI". */
+.marker--mira { color: #9effc8; }
+.marker--mira .glyph {
+  border-radius: 50%;
+  transform: none;
+  border-style: dashed;
+  animation: pulso-mira 0.8s ease-in-out infinite;
+}
+
+@keyframes pulso-mira {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.5; }
+}
+
 /* --------------------------- Tela de abertura --------------------------- */
 
 #overlay {

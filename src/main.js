@@ -50,6 +50,7 @@ import { Projeteis } from './game/Weapons.js';
 import { Blaster } from './game/Blaster.js';
 import { EDICAO } from './shared/edits.js';
 import { Sentinelas } from './game/Sentinelas.js';
+import { CanhoesDaNave } from './game/CanhoesDaNave.js';
 import { Qualidade } from './game/Qualidade.js';
 import { MenuPausa } from './ui/MenuPausa.js';
 
@@ -324,6 +325,7 @@ const blaster = new Blaster(projeteis);
 const jogadorComoDono = {};
 
 const sentinelas = new Sentinelas(engine.scene, projeteis);
+const canhoes = new CanhoesDaNave(projeteis);
 
 /**
  * O jogador como ALVO, na mesma forma que a fauna e os drones.
@@ -1245,10 +1247,14 @@ canvas.addEventListener('mousedown', (event) => {
 
   // `cursorLivre()` cobre pausa, painel, chat e "ainda não começou" de uma vez.
   // Sem isto, clicar no fundo escurecido do menu de pausa disparava o blaster.
-  if (cursorLivre() || mode !== 'FOOT') return;
+  if (cursorLivre()) return;
 
   if (event.button === 0) botao.esquerdo = true;
   if (event.button === 2) botao.direito = true;
+
+  // Pilotando, o botão esquerdo é o gatilho dos canhões e nada mais: as ações
+  // de ferramenta abaixo são todas de quem está a pé.
+  if (mode !== 'FOOT') return;
 
   // Construir é instantâneo: dispara no clique, não enquanto segura. Segurar
   // encheria a base de peças a 60 por segundo.
@@ -1799,6 +1805,18 @@ const markerList = [];
 function buildMarkers(referencePosition) {
   markerList.length = 0;
 
+  // A mira preditiva vem PRIMEIRO: é o único marcador que exige reação
+  // imediata, e a lista é desenhada na ordem em que é montada.
+  if (canhoes.temMira) {
+    markerList.push({
+      id: 'mira',
+      position: canhoes.pontoDeMira,
+      label: 'MIRA',
+      sub: `${canhoes.pontoDeMira.distanceTo(referencePosition).toFixed(0)} m`,
+      kind: 'mira',
+    });
+  }
+
   // Os outros jogadores entram em QUALQUER modo, e antes de tudo: encontrar
   // alguém é o objetivo mais urgente que existe num mundo deste tamanho, e um
   // marcador na tela é a única forma prática de conseguir isso.
@@ -2091,6 +2109,29 @@ engine.start((dt, elapsed) => {
     vitaisJogador.atualizar(dt);
     vitaisNave.atualizar(dt);
     blaster.atualizar(dt);
+    canhoes.atualizar(dt);
+
+    // --- Canhões da nave ---------------------------------------------------
+    // A mira preditiva é recalculada TODO quadro, mesmo sem o gatilho: ela é
+    // um instrumento de leitura, e mostrá-la só ao atirar chegaria tarde
+    // demais para servir de mira.
+    if (mode === 'SHIP') {
+      shipController._getForward(_lookDir);
+      canhoes.mirar(ship.group.position, _lookDir, montarAlvos(), jogadorComoDono);
+      // O botão esquerdo, e não a barra de espaço.
+      //
+      // A lista pedia "Espaço ou botão esquerdo", mas Espaço já sobe a nave
+      // (ver `eixosDoVoo`), e uma tecla com duas funções no mesmo modo é
+      // exatamente o que este arquivo deixou de fazer. O botão esquerdo já é
+      // "usar" a pé e não tem função pilotando — cabe sem conflito.
+      if (botao.esquerdo && !painelAberto && !menuPausa.aberto) {
+        if (canhoes.disparar(ship.group.position, ship.group.quaternion, shipController.velocity, jogadorComoDono)) {
+          audio.terraform(true);
+        }
+      }
+    } else {
+      canhoes.temMira = false;
+    }
     // As sentinelas ANTES dos projéteis: elas se movem e atiram, e o tiro
     // disparado neste quadro deve andar no mesmo quadro. Invertido, todo tiro
     // de drone ficaria um quadro parado na boca.
@@ -2399,7 +2440,7 @@ window.__nms = {
   gameState, inventory, discovery, scanner, seed: SEED, cloudQuality, audio,
   floatingOrigin, multiplayer, build, terraform, viewModel, galaxyMap, warp, weather,
   vitaisJogador, vitaisNave, sombras, ceuAmbiente, projeteis, blaster, jogadorComoDono, hud,
-  sentinelas, alvoJogador, montarAlvos, qualidade, menuPausa, medirGpu, aplicarQualidade,
+  sentinelas, alvoJogador, montarAlvos, qualidade, menuPausa, medirGpu, aplicarQualidade, canhoes,
   saltarPara, alternarMapa,
   get ferramenta() { return ferramentaAtual(); },
   equipar,
