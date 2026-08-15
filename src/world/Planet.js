@@ -381,8 +381,24 @@ export class Planet {
     // abaixo precisam dele, e elas rodam em condições diferentes.
     _dirSonda[0] = local.x; _dirSonda[1] = local.y; _dirSonda[2] = local.z;
 
+    // -----------------------------------------------------------------------
+    // ESTAR DENTRO DO TERRENO É SEMPRE CAVERNA, INDEPENDENTE DO NÍVEL DO MAR.
+    //
+    // A guarda era só `emTerra` (elevação acima do mar), e ficou apertada demais
+    // quando a criei para consertar o empuxo. Medido neste planeta: 69% das
+    // cavernas ficam sob terreno ABAIXO do nível do mar, e ali a sonda nem era
+    // consultada — o jogador entrava e era encaixado no nível do mar, isto é,
+    // teletransportado para a superfície.
+    //
+    // As duas condições são diferentes e ambas necessárias:
+    //   - DENTRO do terreno: é caverna, sempre, mesmo sob o mar;
+    //   - perto da superfície EM TERRA: é a faixa que permite cair numa boca,
+    //     e precisa excluir a água para não atropelar a convenção de nível do
+    //     mar de quem está nadando.
+    // -----------------------------------------------------------------------
+    const dentroDoTerreno = distance < this.config.radius + elevation;
     const emTerra = !this.config.hasWater || elevation > 0;
-    if (this.sonda && emTerra && sample.altitude < ALTURA_SONDAVEL) {
+    if (this.sonda && (dentroDoTerreno || (emTerra && sample.altitude < ALTURA_SONDAVEL))) {
       const chao = this.sonda.chaoAbaixo(_dirSonda, distance, ALCANCE_SONDA);
       if (chao !== null) {
         sample.surfaceRadius = chao;

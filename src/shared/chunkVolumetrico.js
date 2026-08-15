@@ -226,7 +226,7 @@ export function malharChunkVolumetrico({
   const arestaDoChunk = 2 * cfg.radius * size;
   const profundidadeSaia =
     arestaDoChunk * (cfg.lod.skirtRatio ?? 0.05) + (hMax - hMin) * 0.35 + PASSO_RADIAL;
-  const comSaia = costurarSaia(malha, profundidadeSaia);
+  const comSaia = costurarSaia(malha, profundidadeSaia, rMin, rMax);
 
   return { ...comSaia, rMin, rMax, hMin, hMax, colunas: ladoA * ladoA, amostras: total };
 }
@@ -265,8 +265,30 @@ export function malharChunkVolumetrico({
  * @param {{positions:Float32Array, normals:Float32Array, indices:Uint32Array}} malha
  * @param {number} profundidade quanto a cortina desce, em unidades
  */
-function costurarSaia(malha, profundidade) {
+function costurarSaia(malha, profundidade, rMin, rMax) {
   const { positions, normals, indices } = malha;
+
+  // ---------------------------------------------------------------------------
+  // SÓ AS BORDAS ANGULARES GANHAM SAIA — NÃO O TETO NEM O PISO DA CASCA.
+  //
+  // A saia existe para tapar a fresta entre um chunk e o VIZINHO, e vizinho só
+  // existe nos quatro lados angulares. As bordas de cima e de baixo da casca não
+  // fazem divisa com ninguém: são onde a superfície foi cortada pelos limites da
+  // faixa radial.
+  //
+  // Pendurar cortina nelas foi o que encheu o interior das cavernas de lâminas
+  // escuras — cada aresta cortada no piso da casca virava um pano de 20 unidades
+  // caindo dentro do vão. Visto de dentro, é exatamente o "canto quebrado com
+  // glitch" relatado.
+  //
+  // A distinção é feita pelo RAIO do vértice: perto de `rMin` ou `rMax`, ele
+  // está numa tampa radial e não numa parede lateral.
+  // ---------------------------------------------------------------------------
+  const margem = (rMax - rMin) * 0.02 + 1;
+  const naTampa = (i) => {
+    const r = Math.hypot(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+    return r <= rMin + margem || r >= rMax - margem;
+  };
 
   // Arestas dirigidas: a que não tiver a oposta é borda.
   const vistas = new Set();
@@ -312,6 +334,9 @@ function costurarSaia(malha, profundidade) {
   const idxExtra = [];
   for (let e = 0; e < bordas.length; e += 2) {
     const a = bordas[e], b = bordas[e + 1];
+    // Aresta numa tampa radial: sem vizinho para esconder, e a cortina cairia
+    // para dentro da caverna.
+    if (naTampa(a) || naTampa(b)) continue;
     const a2 = rebaixado(a), b2 = rebaixado(b);
     idxExtra.push(a, b, b2, a, b2, a2);
   }
