@@ -53,6 +53,7 @@ import { Sentinelas } from './game/Sentinelas.js';
 import { CanhoesDaNave } from './game/CanhoesDaNave.js';
 import { Piratas } from './game/Piratas.js';
 import { Defesas } from './game/Defesas.js';
+import { digitando } from './core/foco.js';
 import { Qualidade } from './game/Qualidade.js';
 import { MenuPausa } from './ui/MenuPausa.js';
 
@@ -1087,6 +1088,11 @@ hud.ligarChat((texto, alcance) => multiplayer?.falar(texto, alcance) ?? false);
 
 window.addEventListener('keydown', (event) => {
   if (!started || event.ctrlKey || event.metaKey || event.altKey) return;
+  // Os atalhos do jogo cedem para qualquer campo de texto, pela mesma regra dos
+  // controles (ver `core/foco.js`). O chat já se protegia sozinho parando a
+  // propagação; esta linha estende a proteção a todo campo que venha a existir
+  // — o do menu de pausa, uma busca no mapa — sem que cada um precise lembrar.
+  if (digitando(event.target)) return;
 
   // -------------------------------------------------------------------------
   // O CHAT VEM ANTES DE TUDO, INCLUSIVE DO MAPA.

@@ -16,6 +16,7 @@
  */
 
 import * as THREE from 'three';
+import { digitando } from '../core/foco.js';
 
 const _forward = new THREE.Vector3();
 const _up = new THREE.Vector3();
@@ -145,6 +146,19 @@ export class ShipController {
     this._onKeyDown = (event) => {
       // Não sequestra atalhos do browser (F5, F12, Ctrl+R...).
       if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+      // ---------------------------------------------------------------------
+      // COM UM CAMPO DE TEXTO EM FOCO, O TECLADO NÃO É NOSSO.
+      //
+      // Este ouvinte está na JANELA e por isso também recebe o que se digita
+      // num `<input>`. Sem esta linha, o `preventDefault` lá embaixo comia as
+      // teclas W, A, S, D e ESPAÇO do campo do nome do piloto e do campo da
+      // senha, e os `KeyC`/`KeyG`/`KeyX` daqui alternavam cabine, piloto
+      // automático e pulso enquanto a pessoa escrevia o próprio nome.
+      // Ver `core/foco.js`.
+      // ---------------------------------------------------------------------
+      if (digitando(event.target)) return;
+
       this.keys.add(event.code);
 
       if (event.code === 'KeyC') this.cockpitView = !this.cockpitView;

@@ -14,6 +14,7 @@
  */
 
 import * as THREE from 'three';
+import { digitando } from '../core/foco.js';
 
 const _right = new THREE.Vector3();
 const _wish = new THREE.Vector3();
@@ -106,6 +107,11 @@ export class PlayerController {
   _bind() {
     this._onKeyDown = (event) => {
       if (event.ctrlKey || event.metaKey || event.altKey) return;
+      // Mesma regra do `ShipController`: com um campo de texto em foco o
+      // teclado pertence a ele. Aqui o `preventDefault` já estava atrás de
+      // `enabled`, mas o `keys.add` não — e um W registrado enquanto se digita
+      // faz o jogador sair andando assim que o controle volta.
+      if (digitando(event.target)) return;
       this.keys.add(event.code);
       if (this.enabled && ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space'].includes(event.code)) {
         event.preventDefault();
