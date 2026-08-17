@@ -54,7 +54,7 @@ import { CanhoesDaNave } from './game/CanhoesDaNave.js';
 import { Piratas } from './game/Piratas.js';
 import { Defesas } from './game/Defesas.js';
 import { digitando } from './core/foco.js';
-import { Qualidade } from './game/Qualidade.js';
+import { Qualidade, PREDEFINICOES, PADRAO, FAIXAS_CALIBRAGEM } from './game/Qualidade.js';
 import { MenuPausa } from './ui/MenuPausa.js';
 
 /* ========================================================================== */
@@ -290,6 +290,55 @@ async function medirGpu(repeticoes = 24) {
   }
   gl.deleteQuery(consulta);
   return null;
+}
+
+/**
+ * Escolhe a predefinição gráfica MEDINDO a máquina, uma vez, no menu.
+ *
+ * ===========================================================================
+ * POR QUE AQUI, E NÃO DEPOIS
+ * ===========================================================================
+ * `Qualidade.js` explica por que o padrão é "Equilibrado" e não "Alto": o
+ * controlador automático antigo só descia DEPOIS de medir quadros ruins, então
+ * todo jogador de máquina fraca via o jogo engasgar antes de melhorar.
+ *
+ * Essa objeção vale para medir DURANTE o jogo, e some aqui. Na tela de
+ * carregamento a cena já está desenhada e ninguém está jogando: dá para gastar
+ * algumas dezenas de quadros medindo sem que exista um engasgo para ser visto.
+ * E como a medição roda na máquina de verdade, ela não depende de reconhecer
+ * modelos de GPU — uma lista de placas fracas envelhece mal e nunca cobre a
+ * próxima integrada.
+ *
+ * ===========================================================================
+ * O QUE ELA NÃO FAZ
+ * ===========================================================================
+ * Não toca em quem já escolheu. `qualidade.gravado` distingue "primeira vez
+ * nesta máquina" de "há preferência salva" — promover de volta alguém que
+ * baixou de propósito para ganhar fps seria desfazer a decisão dele todo boot.
+ *
+ * Também não faz nada quando a extensão de cronometragem não existe: sem
+ * medida, o padrão continua sendo o meio-termo, que é a escolha certa na
+ * ausência de informação.
+ */
+let calibrou = false;
+async function calibrarQualidade() {
+  if (calibrou || qualidade.gravado) return;
+  calibrou = true;
+
+  const ms = await medirGpu(20);
+  if (ms === null) return;
+
+  const escolha =
+    ms <= FAIXAS_CALIBRAGEM.alto ? 'alto' : ms <= FAIXAS_CALIBRAGEM.equilibrado ? 'equilibrado' : 'desempenho';
+
+  // `calibrar` e não `aplicarPredefinicao`: o segundo GRAVA, e gravar marcaria
+  // esta máquina como "o usuário escolheu" — a calibragem nunca mais rodaria,
+  // nem depois de trocar de placa. Ver a nota no método.
+  qualidade.calibrar(escolha);
+
+  if (escolha !== PADRAO) {
+    bootStatus.textContent += ` · gráficos: ${PREDEFINICOES[escolha].rotulo} (${ms.toFixed(1)} ms)`;
+  }
 }
 
 const menuPausa = new MenuPausa(qualidade, {
@@ -2410,6 +2459,7 @@ engine.start((dt, elapsed) => {
       startButton.disabled = false;
       bootStatus.textContent =
         `${starSystem.planets.length} corpos · ${homePlanet.name} (${homePlanet.config.type}) · seed ${SEED}`;
+      calibrarQualidade();
     } else if (!ready) {
       bootStatus.textContent = starSystem.isReady
         ? `Gerando terreno… ${starSystem.activeChunks}/${CHUNKS_TO_BOOT} setores`

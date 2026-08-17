@@ -79,19 +79,33 @@ export const PREDEFINICOES = {
 /** Usado quando não há nada gravado. Ver a nota longa acima. */
 export const PADRAO = 'equilibrado';
 
+/**
+ * Faixas de custo para a calibragem automática, em milissegundos de GPU por
+ * quadro medidos na tela de carregamento com a predefinição `PADRAO` aplicada.
+ *
+ * Os números saem de um alvo, não de um chute: 8 ms é meio quadro a 60 Hz, e
+ * quem já gasta isso na cena PARADA do menu não tem folga para o jogo em
+ * movimento. Abaixo de 3 ms sobra margem para subir.
+ */
+export const FAIXAS_CALIBRAGEM = { alto: 3, equilibrado: 8 };
+
 function carregar() {
   try {
     const cru = localStorage.getItem(CHAVE);
-    if (!cru) return { ...PREDEFINICOES[PADRAO], predefinicao: PADRAO };
+    if (!cru) return { ...PREDEFINICOES[PADRAO], predefinicao: PADRAO, gravado: false };
     const salvo = JSON.parse(cru);
     // Mescla sobre a predefinição: um campo novo acrescentado numa versão
     // futura não fica `undefined` para quem já tem preferências gravadas.
     const base = PREDEFINICOES[salvo.predefinicao] ?? PREDEFINICOES[PADRAO];
-    return { ...base, ...salvo };
+    // `gravado` distingue "o usuário já escolheu" de "é a primeira vez aqui". É
+    // o que impede a calibragem automática de atropelar uma escolha deliberada:
+    // quem baixou de propósito para ganhar fps não pode ser promovido de volta
+    // no próximo boot.
+    return { ...base, ...salvo, gravado: true };
   } catch {
     // localStorage pode lançar em modo privado ou com armazenamento bloqueado,
     // e uma preferência gráfica jamais pode impedir o jogo de abrir.
-    return { ...PREDEFINICOES[PADRAO], predefinicao: PADRAO };
+    return { ...PREDEFINICOES[PADRAO], predefinicao: PADRAO, gravado: false };
   }
 }
 
@@ -127,6 +141,24 @@ export class Qualidade {
     this._mudou();
   }
 
+  /**
+   * Aplica uma predefinição SEM gravá-la — para a calibragem automática.
+   *
+   * A diferença com `aplicarPredefinicao` é toda o registro. Gravar marcaria
+   * esta máquina como "o usuário escolheu", e a partir daí a calibragem nunca
+   * mais rodaria: trocar de placa de vídeo, ou rodar o mesmo perfil num
+   * computador diferente, ficaria preso na decisão tomada numa máquina que não
+   * é mais esta. Uma escolha do jogador vale para sempre; um palpite do jogo
+   * vale para esta sessão e é refeito na próxima.
+   */
+  calibrar(nome) {
+    const p = PREDEFINICOES[nome];
+    if (!p) return;
+    Object.assign(this, p);
+    this.predefinicao = nome;
+    for (const fn of this._ouvintes) fn();
+  }
+
   definir(campo, valor) {
     if (this[campo] === valor) return;
     this[campo] = valor;
@@ -138,6 +170,9 @@ export class Qualidade {
   }
 
   _mudou() {
+    // A partir daqui existe escolha registrada, e a calibragem automática do
+    // próximo boot precisa respeitá-la.
+    this.gravado = true;
     try {
       localStorage.setItem(CHAVE, JSON.stringify(this._paraGravar()));
     } catch {
