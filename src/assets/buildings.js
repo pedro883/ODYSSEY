@@ -316,6 +316,34 @@ export const PECAS = [
     solido: false,
   },
 
+  /* --- Defesa ------------------------------------------------------------ */
+  // As duas únicas peças que TÊM COMPORTAMENTO. O resto do catálogo é geometria;
+  // estas duas são reconhecidas por `Defesas.js`, que pendura nelas uma cabeça
+  // que gira e uma bolha de escudo. O modelo do kit continua sendo o corpo —
+  // ver a explicação em `corpoDeTorre`.
+  //
+  // O custo é o mais alto da tabela, e em fósforo, que é o recurso reservado ao
+  // que produz ou consome energia. Uma torre precisa custar uma sessão de
+  // mineração: ela é a peça que muda o que acontece com quem chega.
+  {
+    id: 'torre',
+    nome: 'Torre de defesa',
+    categoria: 'tecnologia',
+    modelo: 'base/wall-pillar.glb',
+    encaixe: 'mobilia',
+    custo: { ferrite: 60, cobalto: 40, fosforo: 35 },
+    solido: true,
+  },
+  {
+    id: 'gerador-escudo',
+    nome: 'Gerador de escudo',
+    categoria: 'tecnologia',
+    modelo: 'base/container-tall.glb',
+    encaixe: 'mobilia',
+    custo: { ferrite: 45, cobalto: 55, fosforo: 60 },
+    solido: true,
+  },
+
   /* --- Utilidade --------------------------------------------------------- */
   {
     id: 'duto',

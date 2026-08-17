@@ -52,6 +52,7 @@ import { EDICAO } from './shared/edits.js';
 import { Sentinelas } from './game/Sentinelas.js';
 import { CanhoesDaNave } from './game/CanhoesDaNave.js';
 import { Piratas } from './game/Piratas.js';
+import { Defesas } from './game/Defesas.js';
 import { Qualidade } from './game/Qualidade.js';
 import { MenuPausa } from './ui/MenuPausa.js';
 
@@ -348,6 +349,27 @@ piratas.aoAbater = () => {
   hud.notify('PIRATA ABATIDO · +ESPÓLIO', 1.8);
 };
 
+const defesas = new Defesas(engine.scene, projeteis);
+
+/**
+ * Quem as torres da base consideram inimigo.
+ *
+ * A pergunta é do jogo, não do módulo de defesas (ver o comentário em
+ * `Defesas.ehHostil`). Hoje a resposta é curta: drone de sentinela e pirata. A
+ * fauna fica de fora de propósito — uma torre que abate o bicho que passa
+ * transformaria a base numa armadilha de carne e ainda chamaria as sentinelas
+ * pela infração, que é o oposto do que o jogador pediu ao construí-la.
+ */
+defesas.ehHostil = (alvo) => Boolean(alvo.pirata) || Boolean(alvo.drone);
+
+defesas.aoCairEscudo = () => {
+  hud.notify('ESCUDO DA BASE CAIU', 3);
+  audio.ui(false);
+};
+
+/** Peças de defesa do quadro, reaproveitado. @type {Array<object>} */
+const _defesasDaBase = [];
+
 /**
  * O jogador como ALVO, na mesma forma que a fauna e os drones.
  *
@@ -373,6 +395,10 @@ function montarAlvos() {
   for (const a of activePlanet.fauna.alvos()) _alvos.push(a);
   for (const a of sentinelas.alvos()) _alvos.push(a);
   for (const a of piratas.alvos()) _alvos.push(a);
+  // As defesas entram ANTES do jogador, e a bolha do gerador entra antes da
+  // carcaça dela (ver `Defesas.alvos`): `Projeteis` para no primeiro alvo que o
+  // segmento cruza, então a ordem é o que decide os empates.
+  for (const a of defesas.alvos()) _alvos.push(a);
 
   // A pé o alvo é o traje; pilotando, o casco — e o raio muda junto, porque
   // acertar uma nave é bem mais fácil que acertar uma pessoa.
@@ -1609,6 +1635,10 @@ function saltarPara(sistema) {
       sentinelas.limpar();
       projeteis.limpar();
       piratas.limpar();
+      // As defesas seguem as bases, e as bases são esquecidas logo abaixo. Sem
+      // esta linha, a torre do sistema anterior continuaria na cena — e girando
+      // atrás de alvos a anos-luz de distância.
+      defesas.limpar();
       recemSaltou = true;
       inscreverNaOrigemFlutuante();
       posicionarNaChegada();
@@ -2183,6 +2213,17 @@ engine.start((dt, elapsed) => {
       jogadorComoDono,
       gameState.altitude < 400
     );
+    // ---------------------------------------------------------------------
+    // AS DEFESAS DA BASE, na mesma posição da ordem que as sentinelas e pelo
+    // mesmo motivo: elas atiram, e o tiro deste quadro precisa andar neste
+    // quadro.
+    //
+    // A sincronização vem primeiro porque é ela que dá posição às defesas — sem
+    // ela, uma torre construída neste quadro miraria a partir da origem da cena.
+    // ---------------------------------------------------------------------
+    defesas.sincronizar(build.coletarDefesas(_defesasDaBase));
+    defesas.atualizar(dt, montarAlvos());
+
     // Os tiros avançam DEPOIS da física e ANTES da câmera: assim o impacto é
     // resolvido contra as posições deste quadro, e não contra as do anterior.
     projeteis.atualizar(dt, activePlanet, montarAlvos());
@@ -2482,6 +2523,7 @@ window.__nms = {
   floatingOrigin, multiplayer, build, terraform, viewModel, galaxyMap, warp, weather,
   vitaisJogador, vitaisNave, sombras, ceuAmbiente, projeteis, blaster, jogadorComoDono, hud,
   sentinelas, alvoJogador, montarAlvos, qualidade, menuPausa, medirGpu, aplicarQualidade, canhoes, piratas,
+  defesas,
   saltarPara, alternarMapa,
   get ferramenta() { return ferramentaAtual(); },
   equipar,

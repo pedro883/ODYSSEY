@@ -255,6 +255,19 @@ export class Projeteis {
       for (const alvo of alvos) {
         if (alvo.dono === t.dono) continue;
         if (!alvo.vitais?.vivo) continue;
+        // -----------------------------------------------------------------
+        // `casca`: alvo que só conta para quem vem DE FORA.
+        //
+        // É a bolha do gerador de escudo (ver `Defesas.js`). Ela é uma esfera
+        // grande, e sem esta condição quem estivesse abrigado dentro dela —
+        // a torre da base, o próprio jogador — atiraria na própria proteção a
+        // queima-roupa, o que é absurdo e ainda drenaria o escudo que devia
+        // estar protegendo.
+        //
+        // A pergunta é geométrica e não de facção: o tiro nasceu dentro do
+        // raio? Então esta casca não está no caminho dele.
+        // -----------------------------------------------------------------
+        if (alvo.casca && t.pos.distanceToSquared(alvo.posicao) <= alvo.raio * alvo.raio) continue;
         if (this._cruzaEsfera(t.pos, _prox, alvo.posicao, alvo.raio + 0.25)) {
           atingido = alvo;
           break;

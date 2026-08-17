@@ -12,29 +12,14 @@
  * ===========================================================================
  * A CONTA
  * ===========================================================================
- * Dado o alvo em `P` movendo-se a `V`, a nave em `S` e o projétil a `s`, quer-se
- * o instante `t` em que a bala alcança o alvo:
- *
- *     |P + V·t − S| = s·t
- *
- * Elevando ao quadrado, com `D = P − S`:
- *
- *     (V·V − s²)·t² + 2(V·D)·t + D·D = 0
- *
- * Uma quadrática comum, com três detalhes que decidem se ela serve na prática:
- *
- *   - QUANDO `a ≈ 0` (o alvo foge exatamente à velocidade da bala) ela degenera
- *     em linear. Tratar isso como caso especial evita divisão por zero
- *     justamente na perseguição mais tensa do jogo.
- *   - DAS DUAS RAÍZES interessa a MENOR positiva: é o primeiro encontro. A
- *     maior corresponde à bala alcançando o alvo depois de ele passar por ela,
- *     o que é matemática válida e mira absurda.
- *   - SEM RAIZ POSITIVA não há interceptação possível — o alvo é rápido demais
- *     ou está se afastando rápido demais. Aí a interface precisa dizer isso, e
- *     não apontar para um lugar qualquer.
+ * Está em `intercepcao.js`, junto com a dedução. Ela saiu daqui quando as torres
+ * da base passaram a precisar da mesma antecipação: manter duas cópias de uma
+ * regra de combate é o caminho conhecido para a nave e a torre errarem de formas
+ * diferentes sem motivo aparente.
  */
 
 import * as THREE from 'three';
+import { pontoDeIntercepcao } from './intercepcao.js';
 
 /** Segundos entre disparos. */
 const CADENCIA = 0.16;
@@ -123,48 +108,17 @@ export class CanhoesDaNave {
     this.temMira = false;
     if (!melhor) return null;
 
-    const t = this._tempoDeIntercepcao(
+    const resolvido = pontoDeIntercepcao(
+      this.pontoDeMira,
       posicaoNave,
       melhor.posicao,
-      melhor.velocidade ?? _relativa.set(0, 0, 0)
+      melhor.velocidade ?? _relativa.set(0, 0, 0),
+      VELOCIDADE
     );
-    if (t === null) return null;
+    if (!resolvido) return null;
 
-    this.pontoDeMira
-      .copy(melhor.posicao)
-      .addScaledVector(melhor.velocidade ?? _relativa.set(0, 0, 0), t);
     this.temMira = true;
     return this.pontoDeMira;
-  }
-
-  /**
-   * Resolve `|P + V·t − S| = s·t`. Ver a dedução no topo do arquivo.
-   * @returns {number|null} instante do encontro, ou null se não houver
-   */
-  _tempoDeIntercepcao(origem, alvo, velocidadeAlvo) {
-    _D.copy(alvo).sub(origem);
-
-    const a = velocidadeAlvo.lengthSq() - VELOCIDADE * VELOCIDADE;
-    const b = 2 * velocidadeAlvo.dot(_D);
-    const c = _D.lengthSq();
-
-    // Alvo à mesma velocidade da bala: a quadrática vira linear.
-    if (Math.abs(a) < 1e-6) {
-      if (Math.abs(b) < 1e-9) return null;
-      const t = -c / b;
-      return t > 0 ? t : null;
-    }
-
-    const disc = b * b - 4 * a * c;
-    if (disc < 0) return null; // interceptação impossível
-
-    const raiz = Math.sqrt(disc);
-    const t1 = (-b - raiz) / (2 * a);
-    const t2 = (-b + raiz) / (2 * a);
-
-    // A MENOR positiva: o primeiro encontro.
-    const candidatos = [t1, t2].filter((t) => t > 0).sort((x, y) => x - y);
-    return candidatos.length ? candidatos[0] : null;
   }
 
   /**

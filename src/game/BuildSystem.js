@@ -205,6 +205,17 @@ export class BuildSystem {
     this.materialFantasma = null;
     this.pronto = false;
 
+    /**
+     * Altura do topo das peças que `Defesas.js` reconhece, em unidades de célula.
+     * Medida do modelo em `preparar()`; a presença da chave é o que marca uma
+     * peça como peça de defesa.
+     * @type {Map<string, number>}
+     */
+    this.alturasDeDefesa = new Map();
+
+    /** Registros reaproveitados por `coletarDefesas`. @type {Array<object>} */
+    this._poolDefesas = [];
+
     this._grupoFantasma = new THREE.Group();
     this._grupoFantasma.scale.setScalar(ESCALA_CELULA);
     this._malhaFantasma = null;
@@ -296,6 +307,19 @@ export class BuildSystem {
     // isto quando há piso sob ela; escrever "0,3" à mão aqui só funcionaria até
     // alguém trocar o kit.
     this.espessuraPiso = this.geometrias.get('piso')?.boundingBox.max.y ?? 0;
+
+    // -----------------------------------------------------------------------
+    // ALTURA DO TOPO DAS PEÇAS DE DEFESA, pelo mesmo princípio.
+    //
+    // `Defesas.js` pendura uma cabeça giratória em cima do pilar da torre, e ela
+    // precisa pousar exatamente no topo do modelo. Medir aqui — e não escrever
+    // o número no módulo de defesas — é o que faz trocar o kit não deixar a
+    // cabeça flutuando no ar ou enterrada no pedestal.
+    // -----------------------------------------------------------------------
+    for (const id of ['torre', 'gerador-escudo']) {
+      const geo = this.geometrias.get(id);
+      if (geo) this.alturasDeDefesa.set(id, geo.boundingBox.max.y);
+    }
 
     this._gerarMiniaturas();
 
@@ -1125,6 +1149,73 @@ export class BuildSystem {
   _alturaDoSlot(base, cel, face) {
     if (face !== SLOT_MOBILIA) return 0;
     return base?.pecas.has(`${cel[0]},${cel[1]},${cel[2]},${SLOT_PISO}`) ? this.espessuraPiso : 0;
+  }
+
+  /**
+   * Peças que têm comportamento de defesa, em coordenadas de MUNDO.
+   *
+   * ---------------------------------------------------------------------
+   * POR QUE O BUILDSYSTEM ENTREGA ISTO EM VEZ DE AVISAR QUANDO ALGO É POSTO
+   * ---------------------------------------------------------------------
+   * Uma peça entra por três caminhos: o jogador construindo, a rede replicando o
+   * que outro construiu e o banco restaurando a base ao entrar na sala. Um
+   * `aoColocar` teria de disparar corretamente nos três, e o dia em que um deles
+   * esquecesse, a torre não existiria — sem erro e sem sintoma, até alguém ser
+   * atacado.
+   *
+   * Uma leitura do mapa de peças não tem esse modo de falha: qualquer caminho que
+   * ponha a peça ali ganha a defesa no quadro seguinte. É a mesma razão de o
+   * platô do terreno ser derivado das peças em vez de trafegar pela rede.
+   *
+   * O array é reaproveitado — roda todo quadro.
+   *
+   * @param {Array<object>} saida
+   */
+  coletarDefesas(saida) {
+    saida.length = 0;
+
+    for (const base of this.bases.values()) {
+      // A matriz do grupo pode ser de um rebase atrás; sem isto a torre fica onde
+      // a base estava antes de a origem flutuante se mover.
+      base.grupo.updateWorldMatrix(true, false);
+
+      for (const [chave, item] of base.pecas) {
+        const alturaCabeca = this.alturasDeDefesa.get(item.peca);
+        if (alturaCabeca === undefined) continue;
+
+        this._transformaDaPeca(
+          _matriz,
+          item.cel,
+          item.face,
+          item.giro,
+          this._alturaDoSlot(base, item.cel, item.face)
+        );
+        _matriz.premultiply(base.grupo.matrixWorld);
+
+        const registro = this._poolDefesas[saida.length] ?? this._novoRegistroDefesa();
+        this._poolDefesas[saida.length] = registro;
+
+        _matriz.decompose(registro.posicao, registro.quat, _q);
+        registro.chave = `${base.id}:${chave}`;
+        registro.tipo = item.peca;
+        // A altura vem do modelo, medida em unidades de célula, e a base tem
+        // escala `ESCALA_CELULA`: sem multiplicar, a cabeça da torre nasceria a um
+        // terço da altura do pilar que a sustenta.
+        registro.altura = alturaCabeca * ESCALA_CELULA;
+        saida.push(registro);
+      }
+    }
+    return saida;
+  }
+
+  _novoRegistroDefesa() {
+    return {
+      chave: '',
+      tipo: '',
+      posicao: new THREE.Vector3(),
+      quat: new THREE.Quaternion(),
+      altura: 0,
+    };
   }
 
   /** Transformação de uma peça dentro do espaço da base (unidades de célula). */
