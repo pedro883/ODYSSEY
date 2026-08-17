@@ -12,6 +12,7 @@
 
 import * as THREE from 'three';
 import { aplicarDetalheDeSuperficie } from '../shaders/SurfaceDetail.js';
+import { RAIO as RAIO_SOMBRA } from './Sombras.js';
 
 /**
  * Chave estável de um chunk.
@@ -113,6 +114,15 @@ const VOLUMETRICO =
 /** Quantos chunks descarregados guardamos prontos para voltar. */
 const CACHE_CAPACITY = 220;
 
+/**
+ * Quantas vezes a caixa de sombra um chunk pode medir e ainda valer o passe.
+ *
+ * Três é folgado de propósito: cobre o instante logo após um pouso, quando a
+ * quadtree ainda não refinou e a folha sob os pés do jogador é grande. Acima
+ * disso o chunk é plano na escala da caixa e não projeta nada que se veja.
+ */
+const TAMANHO_MAXIMO = 3;
+
 export class ChunkManager {
   /**
    * @param {object} config config do planeta (`createPlanetConfig`)
@@ -203,6 +213,50 @@ export class ChunkManager {
   }
 
   /**
+   * Escolhe, a cada quadro, quais chunks entram no passe de sombra.
+   *
+   * ===========================================================================
+   * O DESCARTE POR FRUSTUM NÃO SALVA ESTE CASO — MEDIDO
+   * ===========================================================================
+   * A versão anterior ligava `castShadow` em TODO chunk e confiava no three para
+   * descartar os que ficassem fora da caixa de sombra, que tem meia-aresta de
+   * apenas 170 unidades. A suposição parece razoável e é falsa, por causa de
+   * como o descarte funciona: ele testa a ESFERA ENVOLVENTE da malha.
+   *
+   * Um chunk de LOD grosseiro tem esfera envolvente de milhares de unidades.
+   * Ela intersecta a caixa de 170 quase sempre, então o chunk PASSA no teste — e
+   * seus milhares de triângulos são transformados por inteiro para desenhar,
+   * quando muito, uma lasca de sombra. Multiplicado por cem chunks, é o passe
+   * inteiro pago para nada.
+   *
+   * Medido nesta cena, a 1600×900: 115 chunks e 203 mil triângulos entravam no
+   * passe, e a sombra custava 2,32 ms de um quadro de 8,05 ms. Reduzir o mapa de
+   * 2048 para 1024 não mudava nada — sinal de que o custo era GEOMETRIA, não
+   * preenchimento, que é exatamente o que esta hipótese prevê.
+   *
+   * ===========================================================================
+   * AS DUAS CONDIÇÕES
+   * ===========================================================================
+   *   - PERTO: a esfera do chunk precisa alcançar a caixa de sombra. É o teste
+   *     que o three já fazia, mantido porque continua correto.
+   *   - PEQUENO: e o chunk não pode ser muito maior que a própria caixa. É esta
+   *     que faz o trabalho — ela elimina o chunk grosseiro que engloba a caixa
+   *     inteira sem ter detalhe nenhum para projetar dentro dela.
+   *
+   * Não há perda visual porque o relevo próximo, que é o que lança sombra
+   * visível, está sempre no LOD fino: os chunks excluídos são os que já eram
+   * planos na escala da caixa.
+   */
+  _ajustarSombras(cameraLocal) {
+    for (const filho of this.group.children) {
+      if (!filho.isMesh) continue;
+      const raio = filho.geometry.boundingSphere?.radius ?? 0;
+      const perto = filho.position.distanceTo(cameraLocal) - raio < RAIO_SOMBRA;
+      filho.castShadow = perto && raio <= RAIO_SOMBRA * TAMANHO_MAXIMO;
+    }
+  }
+
+  /**
    * Enfileira a geração da malha de um nó — ou a devolve do cache na hora.
    * @returns {boolean} true se foi servido pelo cache (nó já tem malha)
    */
@@ -252,6 +306,8 @@ export class ChunkManager {
     // quando a vegetação estoura o teto de instâncias, quem sobra tem de ser
     // o que está debaixo do nariz do jogador. Ver `PropScatter.update()`.
     if (this.props) this.props.update(cameraLocal);
+
+    this._ajustarSombras(cameraLocal);
     if (!this.isReady || this.pending.size === 0) return;
 
     let slots = this.maxInFlight - this.pool.inFlight;
@@ -330,10 +386,12 @@ export class ChunkManager {
     // O terreno é ao mesmo tempo o maior receptor e um projetor indispensável:
     // sem `castShadow` a encosta oeste de uma montanha fica iluminada ao
     // entardecer como se o pico ao lado não existisse, e é justamente a sombra
-    // longa do relevo que dá escala à paisagem. O custo é contido porque a
-    // câmera de sombra é uma caixa pequena (ver `Sombras.js`) e o three descarta
-    // por frustum os chunks fora dela.
-    mesh.castShadow = true;
+    // longa do relevo que dá escala à paisagem.
+    //
+    // Quem PROJETA, porém, é decidido a cada quadro em `_ajustarSombras()` — a
+    // suposição antiga (de que o three descartaria por frustum os chunks fora da
+    // caixa de sombra) foi medida e é falsa. Ver a explicação lá.
+    mesh.castShadow = false;
     mesh.receiveShadow = true;
     mesh.position.fromArray(payload.center);
     // Chunks nunca se movem depois de criados: dispensa recalcular a matriz

@@ -37,8 +37,15 @@
 
 import * as THREE from 'three';
 
-/** Meia-aresta da caixa de sombra, em unidades de mundo. */
-const RAIO = 170;
+/**
+ * Meia-aresta da caixa de sombra, em unidades de mundo.
+ *
+ * EXPORTADA porque o `ChunkManager` precisa do mesmo número para decidir quais
+ * chunks valem a pena projetar sombra. Duas cópias dessa medida se separariam na
+ * primeira vez que alguém ajustasse a caixa, e o sintoma seria terreno perdendo
+ * sombra sem motivo aparente — ou o custo voltando em silêncio.
+ */
+export const RAIO = 170;
 
 /**
  * Distância da luz virtual ao centro da caixa.
