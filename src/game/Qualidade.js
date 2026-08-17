@@ -53,6 +53,7 @@ export const PREDEFINICOES = {
     sombras: false,
     pos: false,
     detalheTerreno: false,
+    atmosfera: 'baixo',
   },
   equilibrado: {
     rotulo: 'Equilibrado',
@@ -63,6 +64,7 @@ export const PREDEFINICOES = {
     sombras: true,
     pos: true,
     detalheTerreno: true,
+    atmosfera: 'medio',
   },
   alto: {
     rotulo: 'Alto',
@@ -73,6 +75,7 @@ export const PREDEFINICOES = {
     sombras: true,
     pos: true,
     detalheTerreno: true,
+    atmosfera: 'alto',
   },
 };
 
@@ -191,6 +194,7 @@ export class Qualidade {
       sombras: this.sombras,
       pos: this.pos,
       detalheTerreno: this.detalheTerreno,
+      atmosfera: this.atmosfera,
     };
   }
 }

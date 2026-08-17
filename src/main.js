@@ -55,6 +55,7 @@ import { Piratas } from './game/Piratas.js';
 import { Defesas } from './game/Defesas.js';
 import { digitando } from './core/foco.js';
 import { Qualidade, PREDEFINICOES, PADRAO, FAIXAS_CALIBRAGEM } from './game/Qualidade.js';
+import { definirPerfilAtmosfera, PERFIS_ATMOSFERA } from './shaders/AtmosphereShader.js';
 import { MenuPausa } from './ui/MenuPausa.js';
 
 /* ========================================================================== */
@@ -227,6 +228,13 @@ function aplicarQualidade() {
   engine.definirPos(qualidade.pos);
   sombras.definir(qualidade.sombras);
   cloudQuality.aplicar(qualidade.nuvens, qualidade.nuvensAuto);
+
+  // A amostragem do espalhamento atmosférico. Medido NO ESPAÇO, que é onde o
+  // problema foi relatado: as cinco cascas custavam 2,13 ms de um quadro de
+  // 4,71 — 45% dele. É ray marching por fragmento, e o planeta ativo cobre boa
+  // parte da tela; nenhuma das outras alavancas o alcançava, porque a
+  // amostragem estava fixa no shader.
+  definirPerfilAtmosfera(PERFIS_ATMOSFERA[qualidade.atmosfera] ?? PERFIS_ATMOSFERA.alto);
 
   // O detalhe procedural do terreno é caro em fragmento (três oitavas de ruído
   // mais o gradiente para a normal) e é a primeira coisa que se pode perder sem

@@ -79,8 +79,24 @@ const fragmentShader = /* glsl */ `
   // ShaderMaterial. Incluí-las de novo dá erro de redefinição de função.
   // O que ele NÃO injeta é a APLICAÇÃO delas — feita no fim do main().
 
-  const int VIEW_STEPS = 12;
-  const int SUN_STEPS  = 3;
+  // ---------------------------------------------------------------------------
+  // O NÚMERO DE PASSOS É A ALAVANCA MAIS FORTE DESTE SHADER.
+  //
+  // O custo por pixel é VIEW_STEPS × SUN_STEPS avaliações de espalhamento — 36
+  // no perfil cheio. Medido no espaço, com o planeta ocupando boa parte da tela,
+  // as cascas de atmosfera custavam 2,13 ms de um quadro de 4,71 ms: 45%. Numa
+  // GPU de entrada isso vira quase quinze milissegundos sozinho.
+  //
+  // Vem por "defines" e não por uniform porque o laço do GLSL precisa de limite
+  // constante em tempo de compilação. Trocar de perfil recompila o material, o
+  // que é aceitável para algo que muda quando o jogador mexe no menu.
+  // ---------------------------------------------------------------------------
+  #ifndef VIEW_STEPS
+  #define VIEW_STEPS 12
+  #endif
+  #ifndef SUN_STEPS
+  #define SUN_STEPS 3
+  #endif
 
   /**
    * Interseção raio/esfera centrada na origem.
@@ -229,7 +245,58 @@ const fragmentShader = /* glsl */ `
  * @param {object} config saída de `createPlanetConfig()`
  * @returns {{ mesh: THREE.Mesh, uniforms: object }}
  */
-export function createAtmosphere(config) {
+/**
+ * Perfis de amostragem do ray marching, do mais barato ao completo.
+ *
+ * O produto `vista × sol` é o custo por pixel. O perfil baixo custa um terço do
+ * completo; a diferença visual é um degradê ligeiramente mais grosseiro no
+ * terminador, que é pouco perto de recuperar dois terços do custo numa máquina
+ * que não dá conta.
+ */
+export const PERFIS_ATMOSFERA = {
+  baixo: { vista: 6, sol: 2 },
+  medio: { vista: 8, sol: 3 },
+  alto: { vista: 12, sol: 3 },
+};
+
+/**
+ * Materiais vivos, para o perfil poder mudar com o jogo rodando.
+ *
+ * Um registro no módulo, e não um parâmetro passado por `Planet` até aqui: a
+ * amostragem é uma decisão de DESEMPENHO, não de mundo, e fazer cada planeta
+ * carregá-la só para repassá-la adiante acoplaria a geração de mundos às
+ * preferências gráficas. Guardado em `Set` porque planetas nascem e morrem a
+ * cada salto.
+ * @type {Set<THREE.ShaderMaterial>}
+ */
+const materiaisVivos = new Set();
+
+/** Perfil aplicado aos próximos planetas criados. */
+let perfilAtual = PERFIS_ATMOSFERA.alto;
+
+/**
+ * Troca a amostragem — nos materiais que já existem e nos que virão.
+ *
+ * Mexer em `defines` exige recompilar o programa, o que é caro; por isso a
+ * função sai cedo quando nada mudou. Sem essa guarda, cada notificação de
+ * mudança de qualidade (que chega para toda opção, inclusive as que não têm
+ * relação com atmosfera) recompilaria cinco shaders.
+ */
+export function definirPerfilAtmosfera(perfil) {
+  if (!perfil || (perfil.vista === perfilAtual.vista && perfil.sol === perfilAtual.sol)) return;
+  perfilAtual = perfil;
+  for (const m of materiaisVivos) {
+    m.defines.VIEW_STEPS = perfil.vista;
+    m.defines.SUN_STEPS = perfil.sol;
+    m.needsUpdate = true;
+  }
+}
+
+/**
+ * @param {object} config
+ * @param {{vista:number, sol:number}} [perfil] amostragem; padrão, o perfil atual
+ */
+export function createAtmosphere(config, perfil = perfilAtual) {
   const atmosphereRadius = config.radius + config.atmosphere.height;
 
   // ---------------------------------------------------------------------
@@ -279,6 +346,7 @@ export function createAtmosphere(config) {
     vertexShader,
     fragmentShader,
     uniforms,
+    defines: { VIEW_STEPS: perfil.vista, SUN_STEPS: perfil.sol },
     // Alternado em tempo real por `Planet.setAtmosphereSide()`.
     side: THREE.FrontSide,
     transparent: true,
@@ -295,6 +363,16 @@ export function createAtmosphere(config) {
   const geometry = new THREE.SphereGeometry(atmosphereRadius, 64, 48);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.renderOrder = 10; // depois do terreno opaco
+
+  // O registro precisa ser desfeito: sem isto, cada salto entre sistemas deixa
+  // cinco materiais mortos na lista, e uma troca de perfil passa a recompilar
+  // shaders de planetas que não existem mais.
+  materiaisVivos.add(material);
+  const dispose = material.dispose.bind(material);
+  material.dispose = () => {
+    materiaisVivos.delete(material);
+    dispose();
+  };
 
   return { mesh, uniforms };
 }
